@@ -78,6 +78,9 @@ class NewMainWindow(QMainWindow):
         self.tabs.setContentsMargins(0, 0, 0, 0)
         self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
 
+        bars = self.tabs.tabBar()
+        bars.setExpanding(True)
+
         self.tabs.setStyleSheet(
             self.tabs.styleSheet()
             + """
