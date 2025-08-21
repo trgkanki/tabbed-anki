@@ -15,7 +15,7 @@
 
 # -*- coding: utf-8 -*-
 #
-# tabbed-anki v20.5.4i8
+# tabbed v25.8.21i255
 #
 # Copyright: trgk (phu54321@naver.com)
 # License: GNU AGPL, version 3 or later;
