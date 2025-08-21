@@ -60,8 +60,6 @@ class NewMainWindow(QMainWindow):
 
         # intercept other messages
         mw.show = lambda: self.show()
-        mw.activateWindow = lambda: self.activateWindow()
-        mw.raise_ = lambda: self.raise_()
         mw.hide = lambda: self.hide()
         oldSetTitle = mw.setWindowTitle
 
@@ -127,7 +125,7 @@ QTabBar::tab:!selected {
         # (Optional) programmatic navigation example:
         # tabs.setCurrentIndex(1)  # select "InnerWindow2" on startup
 
-    def addAndShowInnerWindow(self, window: QWidget):
+    def addAndShowInnerWindow(self, window: QMainWindow):
         tabIdx = self.tabs.indexOf(window)
         if tabIdx == -1:
             window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
@@ -139,6 +137,10 @@ QTabBar::tab:!selected {
             )
             window.destroyed.connect(lambda _: self._onWindowDestoryed(window))
             tabIdx = self.tabs.addTab(window, window.windowTitle())
+
+            window.activateWindow = lambda: self._activateSubwindow(window)
+            window.raise_ = lambda: self._raiseSubwindow(window)
+
         self.tabs.setCurrentIndex(tabIdx)
 
     def _onTabChange(self, idx):
@@ -149,6 +151,20 @@ QTabBar::tab:!selected {
             pass
         self._mru.insert(0, widget)
         debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
+
+    def _activateSubwindow(self, window: QMainWindow):
+        idx = self.tabs.indexOf(window)
+        if idx != -1:
+            if self.tabs.currentIndex() != idx:
+                self.tabs.setCurrentIndex(idx)
+        self.activateWindow()
+
+    def _raiseSubwindow(self, window: QMainWindow):
+        idx = self.tabs.indexOf(window)
+        if idx != -1:
+            if self.tabs.currentIndex() != idx:
+                self.tabs.setCurrentIndex(idx)
+        self.raise_()
 
     def _onWindowDestoryed(self, w):
         debugLog.log("window %s destroyed (mru %s)" % (w, self._mru))
