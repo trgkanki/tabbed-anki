@@ -23,10 +23,6 @@
 
 
 from aqt import mw, dialogs
-from aqt.addcards import AddCards
-from aqt.browser import Browser
-from aqt.editcurrent import EditCurrent
-from aqt.stats import DeckStats, NewDeckStats
 
 from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
@@ -312,8 +308,20 @@ def wrapClass(clsName, cls):
     cls.show = newShow
 
 
-wrapClass("AddCards", AddCards)
-wrapClass("Browser", Browser)
-wrapClass("EditCurrent", EditCurrent)
-wrapClass("DeckStats", DeckStats)
-wrapClass("NewDeckStats", NewDeckStats)
+# From aqt\__init__.py
+
+wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
+
+_wrappedSet = set()
+
+oldDialogsOpen = dialogs.open
+
+
+def newDialogsOpen(name: str, *args, **kwargs):
+    if name not in _wrappedSet:
+        (creator, instance) = dialogs._dialogs[name]
+        wrapClass(name, creator)
+    oldDialogsOpen(name, *args, **kwargs)
+
+
+dialogs.open = newDialogsOpen
