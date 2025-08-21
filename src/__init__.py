@@ -22,7 +22,7 @@
 # See http://www.gnu.org/licenses/agpl.html
 
 
-from aqt import mw
+from aqt import mw, dialogs
 from aqt.addcards import AddCards
 from aqt.browser import Browser
 from aqt.editcurrent import EditCurrent
@@ -32,7 +32,7 @@ from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
 from .utils import debugLog  # debug log registered here
 
-from typing import Optional, Union
+from typing import Optional, Union, Dict
 
 from PyQt6.QtCore import Qt, QObject, QEvent
 from PyQt6.QtWidgets import (
@@ -41,7 +41,6 @@ from PyQt6.QtWidgets import (
     QTabWidget,
 )
 from PyQt6.QtGui import QKeySequence
-
 
 # ---------- Inner windows (behave like "pages") ----------
 
@@ -79,6 +78,8 @@ class NewMainWindow(QMainWindow):
 
         mw.setWindowTitle = newSetTitle
 
+        self._windowMap: Dict[str, QMainWindow] = {}
+
         # Tab widget becomes the central area, tabs on top by default
         self._mru = []
         self.tabs = QTabWidget()
@@ -88,10 +89,7 @@ class NewMainWindow(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setContentsMargins(0, 0, 0, 0)
         self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
-
-        bars = self.tabs.tabBar()
-        bars.setExpanding(True)
-
+        self.tabs.tabBar().setExpanding(True)
         self.tabs.setStyleSheet(
             self.tabs.styleSheet()
             + """
@@ -127,30 +125,45 @@ QTabBar::tab:!selected {
         )
 
         self.tabs.currentChanged.connect(self._onTabChange)
-        self.tabs.tabCloseRequested.connect(self._closeTab)
+        self.tabs.tabCloseRequested.connect(self._onTabClose)
 
         # Create and add inner windows as tab pages
-        self.addAndShowInnerWindow(mw)
+        self.addAndShowInnerWindow("AnkiQt", mw)
         self.setCentralWidget(self.tabs)
+
+        # mark..
+        oldMarkClosed = dialogs.markClosed
+
+        def newMarkClosed(name: str):
+            debugLog.log("newMarkClosed %s" % (name,))
+            oldMarkClosed(name)
+            try:
+                window = self._windowMap[name]
+            except KeyError:
+                return
+            debugLog.log(" - removing window %s" % (window,))
+            self._onMarkClosed(window)
+
+        dialogs.markClosed = newMarkClosed
 
         # (Optional) programmatic navigation example:
         # tabs.setCurrentIndex(1)  # select "InnerWindow2" on startup
 
-    def addAndShowInnerWindow(self, window: QMainWindow):
+    def addAndShowInnerWindow(self, clsName: str, window: QMainWindow):
         tabIdx = self.tabs.indexOf(window)
         if tabIdx == -1:
             window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
-            window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             window.windowTitleChanged.connect(
                 lambda: self.tabs.setTabText(
                     self.tabs.indexOf(window), window.windowTitle()
                 )
             )
-            window.destroyed.connect(lambda _: self._onWindowDestoryed(window))
             tabIdx = self.tabs.addTab(window, window.windowTitle())
 
             window.activateWindow = lambda: self._activateSubwindow(window)
             window.raise_ = lambda: self._raiseSubwindow(window)
+
+            self._windowMap[clsName] = window
 
         self.tabs.setCurrentIndex(tabIdx)
 
@@ -161,7 +174,7 @@ QTabBar::tab:!selected {
         except ValueError:
             pass
         self._mru.insert(0, widget)
-        debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
+        # debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
 
     def _activateSubwindow(self, window: QMainWindow):
         idx = self.tabs.indexOf(window)
@@ -177,22 +190,26 @@ QTabBar::tab:!selected {
                 self.tabs.setCurrentIndex(idx)
         self.raise_()
 
-    def _onWindowDestoryed(self, w):
-        debugLog.log("window %s destroyed (mru %s)" % (w, self._mru))
+    def _onMarkClosed(self, w):
         try:
             self._mru.remove(w)
         except ValueError:
             pass
 
         for candidate in self._mru:
-            debugLog.log(" - testing candidate %s" % w)
+            # debugLog.log(" - testing candidate %s" % w)
             idx = self.tabs.indexOf(candidate)
             if idx != -1:
-                debugLog.log("    : found at index %s -> moving" % idx)
+                # debugLog.log("    : found at index %s -> moving" % idx)
                 self.tabs.setCurrentIndex(idx)
-                return
+                break
 
-    def _closeTab(self, index: int):
+        idx = self.tabs.indexOf(w)
+        if idx != -1:
+            debugLog.log(" - removing tab entry #%d" % idx)
+            self.tabs.removeTab(idx)
+
+    def _onTabClose(self, index: int):
         widget = self.tabs.widget(index)
         if widget:
             widget.close()
@@ -237,16 +254,6 @@ QTabBar::tab:!selected {
 newMainWindow = NewMainWindow(mw)
 
 
-def wrapClass(cls):
-    oldShow = cls.show
-
-    def newShow(self):
-        newMainWindow.addAndShowInnerWindow(self)
-        oldShow(self)
-
-    cls.show = newShow
-
-
 def dumpParents(w: Optional[QObject]):
     if w is None:
         return "None"
@@ -259,6 +266,13 @@ def dumpParents(w: Optional[QObject]):
     except TypeError:
         pass
     return ">".join(l)
+
+
+def highlight_on_focus(old, new):
+    debugLog.log("focus change: %s -> %s" % (dumpParents(old), dumpParents(new)))
+
+
+mw.app.focusChanged.connect(highlight_on_focus)
 
 
 class ShortcutSpy(QObject):
@@ -288,8 +302,18 @@ spy = ShortcutSpy()
 mw.app.installEventFilter(spy)
 
 
-wrapClass(AddCards)
-wrapClass(Browser)
-wrapClass(EditCurrent)
-wrapClass(DeckStats)
-wrapClass(NewDeckStats)
+def wrapClass(clsName, cls):
+    oldShow = cls.show
+
+    def newShow(self):
+        newMainWindow.addAndShowInnerWindow(clsName, self)
+        oldShow(self)
+
+    cls.show = newShow
+
+
+wrapClass("AddCards", AddCards)
+wrapClass("Browser", Browser)
+wrapClass("EditCurrent", EditCurrent)
+wrapClass("DeckStats", DeckStats)
+wrapClass("NewDeckStats", NewDeckStats)
