@@ -21,11 +21,12 @@
 # License: GNU AGPL, version 3 or later;
 # See http://www.gnu.org/licenses/agpl.html
 
-from aqt.editor import Editor
-from anki.hooks import wrap
-from aqt.utils import askUser
-from aqt import mw
 
+from aqt import mw
+from aqt.addcards import AddCards
+from aqt.browser import Browser
+from aqt.editcurrent import EditCurrent
+from aqt.stats import DeckStats, NewDeckStats
 
 from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
@@ -35,12 +36,8 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication,
     QMainWindow,
     QWidget,
-    QVBoxLayout,
-    QLabel,
-    QPushButton,
     QTabWidget,
 )
 
@@ -120,28 +117,24 @@ QTabBar::tab:!selected {
         self.tabs.tabCloseRequested.connect(self.close_tab)
 
         # Create and add inner windows as tab pages
-        self.addInnerWindow(mw)
+        self.addAndShowInnerWindow(mw)
         self.setCentralWidget(self.tabs)
 
         # (Optional) programmatic navigation example:
         # tabs.setCurrentIndex(1)  # select "InnerWindow2" on startup
 
-    def addInnerWindow(self, window: QWidget):
-        window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
-        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-
-        self.tabs.addTab(window, window.windowTitle())
-        window.windowTitleChanged.connect(
-            lambda: self.tabs.setTabText(
-                self.tabs.indexOf(window), window.windowTitle()
+    def addAndShowInnerWindow(self, window: QWidget):
+        tabIdx = self.tabs.indexOf(window)
+        if tabIdx == -1:
+            window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
+            window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            window.windowTitleChanged.connect(
+                lambda: self.tabs.setTabText(
+                    self.tabs.indexOf(window), window.windowTitle()
+                )
             )
-        )
-        window.destroyed.connect(lambda: self._remove_widget_tab(window))
-
-    def _remove_widget_tab(self, w):
-        idx = self.tabs.indexOf(w)
-        if idx != -1:
-            self.tabs.removeTab(idx)
+            tabIdx = self.tabs.addTab(window, window.windowTitle())
+        self.tabs.setCurrentIndex(tabIdx)
 
     def close_tab(self, index: int):
         widget = self.tabs.widget(index)
@@ -153,4 +146,21 @@ QTabBar::tab:!selected {
         event.ignore()
 
 
-newMainWindow: Optional[NewMainWindow] = NewMainWindow(mw)
+newMainWindow = NewMainWindow(mw)
+
+
+def wrapClass(cls):
+    oldShow = cls.show
+
+    def newShow(self):
+        newMainWindow.addAndShowInnerWindow(self)
+        oldShow(self)
+
+    cls.show = newShow
+
+
+wrapClass(AddCards)
+wrapClass(Browser)
+wrapClass(EditCurrent)
+wrapClass(DeckStats)
+wrapClass(NewDeckStats)
