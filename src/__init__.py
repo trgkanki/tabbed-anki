@@ -23,6 +23,7 @@
 
 
 from aqt import mw, dialogs
+from aqt.utils import tooltip
 
 from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
@@ -36,7 +37,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QTabWidget,
 )
-from PyQt6.QtGui import QKeySequence
+from PyQt6.QtGui import QKeySequence, QShortcut
 
 # ---------- Inner windows (behave like "pages") ----------
 
@@ -48,7 +49,14 @@ def makeWindowInner(window: QWidget):
 class NoShortcutFilter(QObject):
     def eventFilter(self, obj, ev):
         if ev.type() == QEvent.Type.KeyPress:
-            # prevent QTabWidget/QTabBar from consuming it
+            key = ev.key()
+            mods = ev.modifiers()
+
+            # Allow Ctrl+W to propagate normally
+            if (mods & Qt.KeyboardModifier.ControlModifier) and key == Qt.Key.Key_W:
+                return False  # don't swallow → normal processing
+
+            # Block everything else
             ev.ignore()
             return True
         return super().eventFilter(obj, ev)
@@ -123,6 +131,9 @@ QTabBar::tab:!selected {
         self.tabs.currentChanged.connect(self._onTabChange)
         self.tabs.tabCloseRequested.connect(self._onTabClose)
 
+        shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
+        shortcut.activated.connect(self._closeCurrentTab)
+
         # Create and add inner windows as tab pages
         self.addAndShowInnerWindow("AnkiQt", mw)
         self.setCentralWidget(self.tabs)
@@ -162,6 +173,15 @@ QTabBar::tab:!selected {
             self._windowMap[clsName] = window
 
         self.tabs.setCurrentIndex(tabIdx)
+
+    def _closeCurrentTab(self):
+        widget = self.tabs.currentWidget()
+        if widget:
+            if widget == self.mw:
+                # Main widget cannot be closed with Ctrl+W
+                tooltip("Main window should be closed by Alt+F4 / Ctrl+Q")
+                return
+            widget.close()
 
     def _onTabChange(self, idx):
         widget = self.tabs.widget(idx)
