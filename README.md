@@ -1,5 +1,5 @@
-# Addon template
+# Tabbed Anki
 
-[![Donate via patreon](https://img.shields.io/badge/patreon-donate-green.svg)](https://www.patreon.com/trgk)
+Manage various anki windows with tabs. Useful when reviewing in small form factor screens. I hope anki add this upstream!
 
-This branch is a template for pure-python addon.
+![example](example.png)
