@@ -32,7 +32,7 @@ from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
 from .utils import debugLog  # debug log registered here
 
-from typing import Optional
+from typing import Optional, Union
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QTabWidget,
 )
+
 
 # ---------- Inner windows (behave like "pages") ----------
 
@@ -71,6 +72,7 @@ class NewMainWindow(QMainWindow):
         mw.setWindowTitle = newSetTitle
 
         # Tab widget becomes the central area, tabs on top by default
+        self._mru = []
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setDocumentMode(True)
@@ -117,7 +119,9 @@ QTabBar::tab:!selected {
 }
 """
         )
-        self.tabs.tabCloseRequested.connect(self.close_tab)
+
+        self.tabs.currentChanged.connect(self._onTabChange)
+        self.tabs.tabCloseRequested.connect(self._closeTab)
 
         # Create and add inner windows as tab pages
         self.addAndShowInnerWindow(mw)
@@ -136,10 +140,35 @@ QTabBar::tab:!selected {
                     self.tabs.indexOf(window), window.windowTitle()
                 )
             )
+            window.destroyed.connect(lambda _: self._onWindowDestoryed(window))
             tabIdx = self.tabs.addTab(window, window.windowTitle())
         self.tabs.setCurrentIndex(tabIdx)
 
-    def close_tab(self, index: int):
+    def _onTabChange(self, idx):
+        widget = self.tabs.widget(idx)
+        try:
+            self._mru.remove(widget)
+        except ValueError:
+            pass
+        self._mru.insert(0, widget)
+        debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
+
+    def _onWindowDestoryed(self, w):
+        debugLog.log("window %s destroyed (mru %s)" % (w, self._mru))
+        try:
+            self._mru.remove(w)
+        except ValueError:
+            pass
+
+        for candidate in self._mru:
+            debugLog.log(" - testing candidate %s" % w)
+            idx = self.tabs.indexOf(candidate)
+            if idx != -1:
+                debugLog.log("    : found at index %s -> moving" % idx)
+                self.tabs.setCurrentIndex(idx)
+                return
+
+    def _closeTab(self, index: int):
         widget = self.tabs.widget(index)
         if widget:
             widget.close()
