@@ -190,6 +190,38 @@ QTabBar::tab:!selected {
         self.mw.close()
         event.ignore()
 
+    # This is THE hacky code of this program...
+    # Anki compares current focused window (`app.focusWidget().window()`) to
+    # a lot of windows to check if each window is focused. To do that it
+    # compares window like:
+    #
+    #  self.mw.app.focusWidget().window() != self.mw
+    #
+    # LHS of this expression is expected to be `NewMainWindow`, but rhs might
+    # be `mw`, `AddCards` instance, or `Browser` instance or so on. So this
+    # equality will ALWAYS break. To circumvent this we just assume that the
+    # equality holds IF the current focused window NewMainWindow equals to
+    # the RHS.
+    #
+    # This fixes a lot of compatibility problems, like main window not accepting
+    # focus even if the tab is focused. (Reviewer, DeckBrowser, etc)
+    def __eq__(self, other):
+        # Identity fast-path
+        if other is self:
+            return True
+        # Treat canonical mainwindow as equal
+        if other is self.tabs.currentWidget():
+            return True
+        # For anything else, defer to the other side
+        return NotImplemented
+
+    # I doubt `__ne__` is ever implemented on super class QMainWindow, but here
+    # I wanna regard QMainWindow as builtin types. As we're overriding `__eq__`
+    # of builtins we override `__ne__` too.
+    # https://stackoverflow.com/questions/4352244/should-ne-be-implemented-as-the-negation-of-eq
+    def __ne__(self, other):
+        return not self == other
+
 
 newMainWindow = NewMainWindow(mw)
 
