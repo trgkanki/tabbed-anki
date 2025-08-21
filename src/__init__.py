@@ -34,12 +34,13 @@ from .utils import debugLog  # debug log registered here
 
 from typing import Optional, Union
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QObject, QEvent
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
     QTabWidget,
 )
+from PyQt6.QtGui import QKeySequence
 
 
 # ---------- Inner windows (behave like "pages") ----------
@@ -47,6 +48,15 @@ from PyQt6.QtWidgets import (
 
 def makeWindowInner(window: QWidget):
     window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
+
+
+class NoShortcutFilter(QObject):
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.KeyPress:
+            # prevent QTabWidget/QTabBar from consuming it
+            ev.ignore()
+            return True
+        return super().eventFilter(obj, ev)
 
 
 class NewMainWindow(QMainWindow):
@@ -72,6 +82,7 @@ class NewMainWindow(QMainWindow):
         # Tab widget becomes the central area, tabs on top by default
         self._mru = []
         self.tabs = QTabWidget()
+        self.tabs.installEventFilter(NoShortcutFilter(self.tabs))
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setDocumentMode(True)
         self.tabs.setTabsClosable(True)
@@ -234,6 +245,47 @@ def wrapClass(cls):
         oldShow(self)
 
     cls.show = newShow
+
+
+def dumpParents(w: Optional[QObject]):
+    if w is None:
+        return "None"
+
+    l = []
+    try:
+        while w:
+            l.append(type(w).__name__)
+            w = w.parent()
+    except TypeError:
+        pass
+    return ">".join(l)
+
+
+class ShortcutSpy(QObject):
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t in (
+            QEvent.Type.ShortcutOverride,
+            QEvent.Type.KeyPress,
+            QEvent.Type.Shortcut,
+        ):
+            try:
+                ks = (
+                    QKeySequence(int(ev.modifiers()) | ev.key()).toString()
+                    if hasattr(ev, "key")
+                    else ""
+                )
+            except Exception:
+                ks = ""
+            debugLog.log(
+                f"[{t.name}] on {type(obj).__name__} objectChain='{dumpParents(obj)}' seq='{ks}'"
+            )
+        return super().eventFilter(obj, ev)
+
+
+# usage:
+spy = ShortcutSpy()
+mw.app.installEventFilter(spy)
 
 
 wrapClass(AddCards)
