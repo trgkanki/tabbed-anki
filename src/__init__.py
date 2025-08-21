@@ -110,9 +110,6 @@ QTabBar::tab:selected {
     /* remove possible focus border */
     outline: none;
 }
-QTabBar::tab:hover {
-    background: palette(midlight);
-}
 QTabBar::tab:!selected {
     background: palette(base);
     color: palette(text);
