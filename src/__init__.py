@@ -89,6 +89,7 @@ class NewMainWindow(QMainWindow):
 
         self.setWindowTitle(mw.windowTitle())
         self.resize(mw.size())
+        self.setWindowIcon(mw.windowIcon())
 
         # intercept other messages
         mw.show = lambda: self.show()
