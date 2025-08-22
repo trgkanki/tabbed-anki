@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
     QTabWidget,
 )
 from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 # ---------- Inner windows (behave like "pages") ----------
 
@@ -60,6 +61,10 @@ def makeWindowInner(window: QWidget):
     the native window stack → segfault.
     """
     window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
+
+
+def _fixWebviewBlackGlitch(web: QWebEngineView):
+    web.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
 
 
 class NoShortcutFilter(QObject):
@@ -86,6 +91,8 @@ class NewMainWindow(QMainWindow):
 
         # Demote this window before anything happens
         makeWindowInner(mw)
+
+        _fixWebviewBlackGlitch(mw.web)
 
         self.setWindowTitle(mw.windowTitle())
         self.resize(mw.size())
@@ -298,7 +305,7 @@ oldInit = AnkiWebView.__init__
 
 def newInit(self, *args, **kwargs):
     oldInit(self, *args, **kwargs)
-    self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+    _fixWebviewBlackGlitch(self)
 
 
 AnkiWebView.__init__ = newInit
