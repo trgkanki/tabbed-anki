@@ -15,7 +15,7 @@
 
 # -*- coding: utf-8 -*-
 #
-# tabbed v25.8.22i1
+# tabbed v25.8.22i18
 #
 # Copyright: trgk (phu54321@naver.com)
 # License: GNU AGPL, version 3 or later;
