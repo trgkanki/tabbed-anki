@@ -38,6 +38,7 @@ from PyQt6.QtCore import Qt, QObject, QEvent
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
+    QDialog,
     QTabWidget,
 )
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -340,7 +341,12 @@ def newDialogsOpen(name: str, *args, **kwargs):
     if name in wrappedDialogs:
         if name not in _wrappedSet:
             (creator, instance) = dialogs._dialogs[name]
-            wrapClass(name, creator)
+            if issubclass(creator, QDialog):
+                debugLog.log(
+                    "error: %s is QDialog, which cannot be made as a tab." % (creator,)
+                )
+            else:
+                wrapClass(name, creator)
             _wrappedSet.add(name)
     oldDialogsOpen(name, *args, **kwargs)
 
