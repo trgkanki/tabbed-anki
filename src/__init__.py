@@ -337,9 +337,11 @@ def wrapClass(clsName, cls):
 
 
 def newDialogsOpen(name: str, *args, **kwargs):
-    if name not in _wrappedSet:
-        (creator, instance) = dialogs._dialogs[name]
-        wrapClass(name, creator)
+    if name in wrappedDialogs:
+        if name not in _wrappedSet:
+            (creator, instance) = dialogs._dialogs[name]
+            wrapClass(name, creator)
+            _wrappedSet.add(name)
     oldDialogsOpen(name, *args, **kwargs)
 
 
