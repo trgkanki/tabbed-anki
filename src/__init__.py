@@ -286,7 +286,8 @@ QTabBar::tab:!selected {
 newMainWindow = NewMainWindow(mw)
 
 
-def dumpParents(w: Optional[QObject]):
+def _widgetToPath(w: Optional[QObject]):
+    """For debugging"""
     if w is None:
         return "None"
 
@@ -300,38 +301,13 @@ def dumpParents(w: Optional[QObject]):
     return ">".join(l)
 
 
-def highlight_on_focus(old, new):
-    debugLog.log("focus change: %s -> %s" % (dumpParents(old), dumpParents(new)))
+# From aqt\__init__.py
 
+wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
 
-mw.app.focusChanged.connect(highlight_on_focus)
+_wrappedSet = set()
 
-
-class ShortcutSpy(QObject):
-    def eventFilter(self, obj, ev):
-        t = ev.type()
-        if t in (
-            QEvent.Type.ShortcutOverride,
-            QEvent.Type.KeyPress,
-            QEvent.Type.Shortcut,
-        ):
-            try:
-                ks = (
-                    QKeySequence(int(ev.modifiers()) | ev.key()).toString()
-                    if hasattr(ev, "key")
-                    else ""
-                )
-            except Exception:
-                ks = ""
-            debugLog.log(
-                f"[{t.name}] on {type(obj).__name__} objectChain='{dumpParents(obj)}' seq='{ks}'"
-            )
-        return super().eventFilter(obj, ev)
-
-
-# usage:
-spy = ShortcutSpy()
-mw.app.installEventFilter(spy)
+oldDialogsOpen = dialogs.open
 
 
 def wrapClass(clsName, cls):
@@ -342,15 +318,6 @@ def wrapClass(clsName, cls):
         oldShow(self)
 
     cls.show = newShow
-
-
-# From aqt\__init__.py
-
-wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
-
-_wrappedSet = set()
-
-oldDialogsOpen = dialogs.open
 
 
 def newDialogsOpen(name: str, *args, **kwargs):
