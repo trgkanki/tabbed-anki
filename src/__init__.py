@@ -43,6 +43,18 @@ from PyQt6.QtGui import QKeySequence, QShortcut
 
 
 def makeWindowInner(window: QWidget):
+    """Make MainWindow convertible to tabs.
+
+    Note: This must be called BEFORE window is "shown" (e.g geometry is queried)
+    or it will sefgault.
+
+    ChatGPT says:
+    This crash is a known foot-gun: on macOS you generally cannot “demote” a
+    live top-level QMainWindow into a child widget by toggling off Qt.Window
+    and dropping it into a layout. Cocoa’s NSWindow/toolbar/menubar wiring is
+    already created; changing window flags + reparenting after that can corrupt
+    the native window stack → segfault.
+    """
     window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
 
 
@@ -67,6 +79,9 @@ class NewMainWindow(QMainWindow):
         super().__init__()
 
         self.mw = mw
+
+        # Demote this window before anything happens
+        makeWindowInner(mw)
 
         self.setWindowTitle(mw.windowTitle())
         self.resize(mw.size())
@@ -103,6 +118,7 @@ QTabBar::tab {
     height: 22px;               /* try 18-24px */
     padding: 2px 8px;           /* vertical, horizontal */
     margin: 0px;
+    border-bottom: 1px solid palette(mid);
     /* optional: font-size: 11px; */
 }
 /* compact the pane edge */
@@ -159,7 +175,7 @@ QTabBar::tab:!selected {
     def addAndShowInnerWindow(self, clsName: str, window: QMainWindow):
         tabIdx = self.tabs.indexOf(window)
         if tabIdx == -1:
-            window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
+            makeWindowInner(window)
             window.windowTitleChanged.connect(
                 lambda: self.tabs.setTabText(
                     self.tabs.indexOf(window), window.windowTitle()
