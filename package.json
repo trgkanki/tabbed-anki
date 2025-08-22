@@ -1,6 +1,6 @@
 {
   "name": "tabbed-anki",
-  "version": "20.5.4i8",
+  "version": "25.8.22i1",
   "description": "template for trgkanki's addon",
   "scripts": {
     "postinstall": "python3 -m pip install -r requirements.txt",
