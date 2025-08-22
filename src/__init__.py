@@ -26,6 +26,7 @@ from aqt import mw, dialogs
 from aqt.utils import tooltip
 from aqt.webview import AnkiWebView
 
+from anki.utils import is_mac
 
 from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
@@ -149,8 +150,9 @@ QTabBar::tab:!selected {
         self.tabs.currentChanged.connect(self._onTabChange)
         self.tabs.tabCloseRequested.connect(self._onTabClose)
 
-        shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
-        shortcut.activated.connect(self._closeCurrentTab)
+        if not is_mac:
+            shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
+            shortcut.activated.connect(self._closeCurrentTab)
 
         # Create and add inner windows as tab pages
         self.addAndShowInnerWindow("AnkiQt", mw)
