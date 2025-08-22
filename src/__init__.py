@@ -24,6 +24,8 @@
 
 from aqt import mw, dialogs
 from aqt.utils import tooltip
+from aqt.webview import AnkiWebView
+
 
 from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
@@ -284,6 +286,18 @@ QTabBar::tab:!selected {
 
 
 newMainWindow = NewMainWindow(mw)
+
+# macOS QWebEngineView fix
+
+oldInit = AnkiWebView.__init__
+
+
+def newInit(self, *args, **kwargs):
+    oldInit(self, *args, **kwargs)
+    self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+
+
+AnkiWebView.__init__ = newInit
 
 
 def _widgetToPath(w: Optional[QObject]):
