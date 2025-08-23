@@ -328,7 +328,7 @@ def _widgetToPath(w: Optional[QObject]):
 
 # From aqt\__init__.py
 
-wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
+wrappedDialogs = ["AddCards", "Browser", "EditCurrent"]
 
 _wrappedSet = set()
 
