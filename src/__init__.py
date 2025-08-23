@@ -40,6 +40,8 @@ from PyQt6.QtWidgets import (
     QWidget,
     QDialog,
     QTabWidget,
+    QMenuBar,
+    QMenu,
 )
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -81,6 +83,45 @@ class NoShortcutFilter(QObject):
             ev.ignore()
             return True
         return super().eventFilter(obj, ev)
+
+
+def _macOSCloneChildMenuBar(parent: QMainWindow, child: QMainWindow):
+    pmb = parent.menuBar() or QMenuBar(parent)
+    if parent.menuBar() is None:
+        parent.setMenuBar(pmb)
+    pmb.clear()
+
+    cmb = child.menuBar()
+    if cmb is None:
+        return  # nothing to merge
+
+    insertedMenus = []
+
+    # Create sibling menus on parent and reuse QAction objects
+    for topAct in cmb.actions():
+        menu = topAct.menu()
+        if not menu:
+            # top-level action without submenu (rare) — add directly
+            pmb.addAction(topAct)
+            continue
+
+        clone = QMenu(menu.title(), parent)
+        # carry over icon/shortcut-hints if desired
+        clone.setIcon(menu.icon())
+
+        for act in menu.actions():
+            # QAction can be added to multiple menus
+            clone.addAction(act)
+
+        pmb.addMenu(clone)
+        insertedMenus.append(clone)
+
+    # Optional: ensure shortcuts work from the outer window, too.
+    # Many QAction defaults use WindowShortcut; keep them alive on the active top-level:
+    for m in insertedMenus:
+        for act in m.actions():
+            act.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+            # or WidgetWithChildrenShortcut if you prefer scoping to the parent window
 
 
 class NewMainWindow(QMainWindow):
@@ -214,12 +255,16 @@ QTabBar::tab:!selected {
 
     def _onTabChange(self, idx):
         widget = self.tabs.widget(idx)
-        try:
-            self._mru.remove(widget)
-        except ValueError:
-            pass
-        self._mru.insert(0, widget)
-        # debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
+        if widget:
+            try:
+                self._mru.remove(widget)
+            except ValueError:
+                pass
+            self._mru.insert(0, widget)
+            # debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
+
+            if is_mac:
+                _macOSCloneChildMenuBar(self, widget)
 
     def _activateSubwindow(self, window: QMainWindow):
         idx = self.tabs.indexOf(window)
