@@ -185,8 +185,8 @@ QTabBar::tab + QTabBar::tab {
 }
 QTabBar::tab:selected {
     /* set your own selected look */
-    background: palette(button);     /* or a custom color */
-    color: palette(button-text);
+    background: palette(highlight);     /* or a custom color */
+    color: palette(highlight-text);
     /* remove possible focus border */
     outline: none;
 }
