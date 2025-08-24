@@ -26,7 +26,10 @@ from aqt import mw, dialogs
 from aqt.utils import tooltip
 from aqt.webview import AnkiWebView
 
+from aqt.addcards import AddCards
+
 from anki.utils import is_mac
+from anki.hooks import wrap
 
 from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
@@ -244,6 +247,14 @@ QTabBar::tab:!selected {
 
         self.tabs.setCurrentIndex(tabIdx)
 
+    def selectTabIfExists(self, clsName: str):
+        try:
+            window = self._windowMap[clsName]
+        except KeyError:
+            return
+
+        self.tabs.setCurrentWidget(window)
+
     def _closeCurrentTab(self):
         widget = self.tabs.currentWidget()
         if widget:
@@ -356,20 +367,16 @@ def newInit(self, *args, **kwargs):
 AnkiWebView.__init__ = newInit
 
 
-def _widgetToPath(w: Optional[QObject]):
-    """For debugging"""
-    if w is None:
-        return "None"
-
-    l = []
+# Add cards 'quit without saving' confirmation
+def cb(self, onOk):
     try:
-        while w:
-            l.append(type(w).__name__)
-            w = w.parent()
-    except TypeError:
+        if not self.editor.fieldsAreBlank(self._last_added_note):
+            newMainWindow.selectTabIfExists("AddCards")
+    except AttributeError:
         pass
-    return ">".join(l)
 
+
+AddCards.ifCanClose = wrap(AddCards.ifCanClose, cb, "before")
 
 # From aqt\__init__.py
 
