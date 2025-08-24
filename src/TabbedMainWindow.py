@@ -72,7 +72,7 @@ class TabbedMainWindow(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setContentsMargins(0, 0, 0, 0)
         self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
-        self.tabs.tabBar().setExpanding(True)
+        self.tabs.tabBar().setExpanding(True)  # type: ignore
         self.tabs.setStyleSheet(
             self.tabs.styleSheet()
             + """
@@ -223,9 +223,11 @@ QTabBar::tab:!selected {
         if widget:
             widget.close()
 
-    def closeEvent(self, event):
+    def closeEvent(self, a0):
+        event = a0
         self.mw.close()
-        event.ignore()
+        if event:
+            event.ignore()
 
     # This is THE hacky code of this program...
     # Anki compares current focused window (`app.focusWidget().window()`) to

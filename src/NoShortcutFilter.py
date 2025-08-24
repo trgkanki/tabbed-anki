@@ -1,9 +1,15 @@
 from PyQt6.QtCore import Qt, QObject, QEvent
+from PyQt6.QtGui import QKeyEvent
+from typing import cast
 
 
 class NoShortcutFilter(QObject):
-    def eventFilter(self, obj, ev):
-        if ev.type() == QEvent.Type.KeyPress:
+    def eventFilter(self, a0, a1):
+        obj = a0
+        ev = a1
+
+        if ev and ev.type() == QEvent.Type.KeyPress:
+            ev = cast(QKeyEvent, ev)
             key = ev.key()
             mods = ev.modifiers()
 

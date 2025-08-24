@@ -1,6 +1,6 @@
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from aqt.webview import AnkiWebView
 from PyQt6.QtCore import Qt
+from aqt.webview import AnkiWebView
 
 
 def fixWebviewBlackGlitch(web: QWebEngineView):
