@@ -102,9 +102,6 @@ QTabBar::tab + QTabBar::tab {
     margin-left: 1px;
 }
 QTabBar::tab:selected {
-    /* set your own selected look */
-    background: palette(highlight);     /* or a custom color */
-    color: palette(highlight-text);
     /* remove possible focus border */
     outline: none;
 }
