@@ -9,19 +9,18 @@ from typing import Optional, Dict, cast
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QMainWindow,
-    QWidget,
+    QMenuBar,
     QTabWidget,
 )
 from PyQt6.QtGui import QKeySequence, QShortcut
 
-from .macosCloneMenubar import macOSCloneChildMenuBar
 from .fixWebviewBlackGlitch import fixWebviewBlackGlitch
 from .NoShortcutFilter import NoShortcutFilter
 
 
 class TabbedMainWindow(QMainWindow):
     @staticmethod
-    def _makeWindowInner(window: QWidget):
+    def _makeWindowInner(window: QMainWindow):
         """Make MainWindow convertible to tabs.
 
         Note: This must be called BEFORE window is "shown" (e.g geometry is queried)
@@ -29,15 +28,23 @@ class TabbedMainWindow(QMainWindow):
 
         ChatGPT says:
         This crash is a known foot-gun: on macOS you generally cannot “demote” a
-        live top-level QMainWindow into a child widget by toggling off Qt.Window
+        live top-level QMainWindow into a child widget by wtoggling off Qt.Window
         and dropping it into a layout. Cocoa’s NSWindow/toolbar/menubar wiring is
         already created; changing window flags + reparenting after that can corrupt
         the native window stack → segfault.
         """
         window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
+        if is_mac:
+            menuBar = window.menuBar()
+            if menuBar:
+                menuBar.setNativeMenuBar(False)
 
     def __init__(self, mw):
         super().__init__()
+
+        if is_mac and self.menuBar() is None:
+            pmb = QMenuBar(self)
+            self.setMenuBar(pmb)
 
         self.mw = mw
 
@@ -181,9 +188,6 @@ QTabBar::tab:!selected {
                 pass
             self._mru.insert(0, widget)
             # debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
-
-            if is_mac:
-                macOSCloneChildMenuBar(self, cast(QMainWindow, widget))
 
     def _activateSubwindow(self, window: QMainWindow):
         idx = self.tabs.indexOf(window)
