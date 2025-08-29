@@ -1,6 +1,6 @@
 from aqt import mw, dialogs
 from aqt.utils import tooltip
-from anki.utils import is_mac
+from anki.utils import is_mac, is_win
 
 from .utils import debugLog  # debug log registered here
 
@@ -102,7 +102,16 @@ QTabBar::tab + QTabBar::tab {
     margin-left: 1px;
 }
 QTabBar::tab:selected {
-    /* remove possible focus border */
+"""
+            + (
+                """\
+    background: palette(highlight);
+    color: palette(highlight-text);
+"""
+                if is_win
+                else ""
+            )
+            + """    /* remove possible focus border */
     outline: none;
 }
 QTabBar::tab:!selected {
