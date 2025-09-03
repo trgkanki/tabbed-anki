@@ -102,16 +102,9 @@ QTabBar::tab + QTabBar::tab {
     margin-left: 1px;
 }
 QTabBar::tab:selected {
-"""
-            + (
-                """\
     background: palette(highlight);
     color: palette(highlight-text);
-"""
-                if is_win
-                else ""
-            )
-            + """    /* remove possible focus border */
+    /* remove possible focus border */
     outline: none;
 }
 QTabBar::tab:!selected {
