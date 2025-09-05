@@ -66,7 +66,7 @@ def newDialogsOpen(name: str, *args, **kwargs):
             else:
                 wrapClass(name, creator)
             _wrappedSet.add(name)
-    _oldDialogsOpen(name, *args, **kwargs)
+    return _oldDialogsOpen(name, *args, **kwargs)
 
 
 dialogs.open = newDialogsOpen
