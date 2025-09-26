@@ -7,15 +7,18 @@ from .utils import debugLog  # debug log registered here
 from typing import Optional, Dict, cast
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (
-    QMainWindow,
-    QMenuBar,
-    QTabWidget,
-)
+from PyQt6.QtWidgets import QMainWindow, QMenuBar, QTabWidget, QMdiSubWindow
 from PyQt6.QtGui import QKeySequence, QShortcut
-
-from .fixWebviewBlackGlitch import fixWebviewBlackGlitch
 from .NoShortcutFilter import NoShortcutFilter
+
+
+class TabMdiSubWindow(QMdiSubWindow):
+    def __init__(self, childWindow: QMainWindow, parent=None):
+        super().__init__(parent)
+        # Remove window decorations since we're using it as a container
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWidget(childWindow)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
 
 class TabbedMainWindow(QMainWindow):
@@ -33,7 +36,6 @@ class TabbedMainWindow(QMainWindow):
         already created; changing window flags + reparenting after that can corrupt
         the native window stack → segfault.
         """
-        window.setWindowFlags(window.windowFlags() & ~Qt.WindowType.Window)
         if is_mac:
             menuBar = window.menuBar()
             if menuBar:
@@ -50,8 +52,6 @@ class TabbedMainWindow(QMainWindow):
 
         # Demote this window before anything happens
         TabbedMainWindow._makeWindowInner(mw)
-
-        fixWebviewBlackGlitch(mw.web)
 
         self.setWindowTitle(mw.windowTitle())
         self.resize(mw.size())
@@ -143,23 +143,38 @@ QTabBar::tab:!selected {
         # (Optional) programmatic navigation example:
         # tabs.setCurrentIndex(1)  # select "InnerWindow2" on startup
 
+    def _getWindowAssociatedMdiSubWindow(
+        self, window: QMainWindow
+    ) -> Optional[TabMdiSubWindow]:
+        tabCount = self.tabs.count()
+        for i in range(tabCount):
+            w = self.tabs.widget(i)
+            w = cast(TabMdiSubWindow, w)
+            if w.widget() is window:
+                return w
+
+        return None
+
     def addAndShowInnerWindow(self, clsName: str, window: QMainWindow):
-        tabIdx = self.tabs.indexOf(window)
-        if tabIdx == -1:
+        mdiWindow = self._getWindowAssociatedMdiSubWindow(window)
+        if not mdiWindow:
             TabbedMainWindow._makeWindowInner(window)
+
+            mdiWindow = TabMdiSubWindow(window)
             window.windowTitleChanged.connect(
                 lambda: self.tabs.setTabText(
-                    self.tabs.indexOf(window), window.windowTitle()
+                    self.tabs.indexOf(mdiWindow), window.windowTitle()
                 )
             )
-            tabIdx = self.tabs.addTab(window, window.windowTitle())
+            tabIdx = self.tabs.addTab(mdiWindow, window.windowTitle())
+            self.tabs.setCurrentIndex(tabIdx)
 
             window.activateWindow = lambda: self._activateSubwindow(window)
             window.raise_ = lambda: self._raiseSubwindow(window)
 
             self._windowMap[clsName] = window
-
-        self.tabs.setCurrentIndex(tabIdx)
+        else:
+            self.tabs.setCurrentWidget(mdiWindow)
 
     def selectTabIfExists(self, clsName: str):
         try:
@@ -167,12 +182,15 @@ QTabBar::tab:!selected {
         except KeyError:
             return
 
-        self.tabs.setCurrentWidget(window)
+        mdiWindow = self._getWindowAssociatedMdiSubWindow(window)
+        self.tabs.setCurrentWidget(mdiWindow)
 
     def _closeCurrentTab(self):
         widget = self.tabs.currentWidget()
         if widget:
-            if widget == self.mw:
+            widget = cast(TabMdiSubWindow, widget)
+
+            if widget.widget() == self.mw:
                 # Main widget cannot be closed with Ctrl+W
                 tooltip("Main window should be closed by Alt+F4 / Cmd+Q")
                 return
@@ -181,25 +199,25 @@ QTabBar::tab:!selected {
     def _onTabChange(self, idx):
         widget = self.tabs.widget(idx)
         if widget:
+            widget = cast(TabMdiSubWindow, widget)
+            subWindow = widget.widget()
             try:
-                self._mru.remove(widget)
+                self._mru.remove(subWindow)
             except ValueError:
                 pass
-            self._mru.insert(0, widget)
+            self._mru.insert(0, subWindow)
             # debugLog.log("tab changed to %d (%s), mru %s" % (idx, widget, self._mru))
 
     def _activateSubwindow(self, window: QMainWindow):
-        idx = self.tabs.indexOf(window)
-        if idx != -1:
-            if self.tabs.currentIndex() != idx:
-                self.tabs.setCurrentIndex(idx)
+        mdiWindow = self._getWindowAssociatedMdiSubWindow(window)
+        if mdiWindow and self.tabs.currentWidget() is not mdiWindow:
+            self.tabs.setCurrentWidget(mdiWindow)
         self.activateWindow()
 
     def _raiseSubwindow(self, window: QMainWindow):
-        idx = self.tabs.indexOf(window)
-        if idx != -1:
-            if self.tabs.currentIndex() != idx:
-                self.tabs.setCurrentIndex(idx)
+        mdiWindow = self._getWindowAssociatedMdiSubWindow(window)
+        if mdiWindow and self.tabs.currentWidget() is not mdiWindow:
+            self.tabs.setCurrentWidget(mdiWindow)
         self.raise_()
 
     def _onMarkClosed(self, w):
@@ -209,15 +227,17 @@ QTabBar::tab:!selected {
             pass
 
         for candidate in self._mru:
+            mdiWindow = self._getWindowAssociatedMdiSubWindow(candidate)
             # debugLog.log(" - testing candidate %s" % w)
-            idx = self.tabs.indexOf(candidate)
+            idx = self.tabs.indexOf(mdiWindow)
             if idx != -1:
                 # debugLog.log("    : found at index %s -> moving" % idx)
                 self.tabs.setCurrentIndex(idx)
                 break
 
-        idx = self.tabs.indexOf(w)
-        if idx != -1:
+        mdiWindow = self._getWindowAssociatedMdiSubWindow(w)
+        if mdiWindow:
+            idx = self.tabs.indexOf(mdiWindow)
             debugLog.log(" - removing tab entry #%d" % idx)
             self.tabs.removeTab(idx)
 
@@ -251,9 +271,12 @@ QTabBar::tab:!selected {
         # Identity fast-path
         if other is self:
             return True
+
         # Treat canonical mainwindow as equal
-        if other is self.tabs.currentWidget():
+        currentWidget = self.tabs.currentWidget()
+        if currentWidget and cast(TabMdiSubWindow, currentWidget).widget() is other:
             return True
+
         # For anything else, defer to the other side
         return NotImplemented
 
