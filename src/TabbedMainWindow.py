@@ -18,71 +18,9 @@ class TabMdiSubWindow(QMdiSubWindow):
         # Remove window decorations since we're using it as a container
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setWidget(childWindow)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
 
-class TabbedMainWindow(QMainWindow):
-    @staticmethod
-    def _makeWindowInner(window: QMainWindow):
-        """Make MainWindow convertible to tabs.
-
-        Note: This must be called BEFORE window is "shown" (e.g geometry is queried)
-        or it will sefgault.
-
-        ChatGPT says:
-        This crash is a known foot-gun: on macOS you generally cannot “demote” a
-        live top-level QMainWindow into a child widget by wtoggling off Qt.Window
-        and dropping it into a layout. Cocoa’s NSWindow/toolbar/menubar wiring is
-        already created; changing window flags + reparenting after that can corrupt
-        the native window stack → segfault.
-        """
-        if is_mac:
-            menuBar = window.menuBar()
-            if menuBar:
-                menuBar.setNativeMenuBar(False)
-
-    def __init__(self, mw):
-        super().__init__()
-
-        if is_mac and self.menuBar() is None:
-            pmb = QMenuBar(self)
-            self.setMenuBar(pmb)
-
-        self.mw = mw
-
-        # Demote this window before anything happens
-        TabbedMainWindow._makeWindowInner(mw)
-
-        self.setWindowTitle(mw.windowTitle())
-        self.resize(mw.size())
-        self.setWindowIcon(mw.windowIcon())
-
-        # intercept other messages
-        mw.show = lambda: self.show()
-        mw.hide = lambda: self.hide()
-        oldSetTitle = mw.setWindowTitle
-
-        def newSetTitle(a0: Optional[str]):
-            self.setWindowTitle(a0)
-            oldSetTitle(a0)
-
-        mw.setWindowTitle = newSetTitle
-
-        self._windowMap: Dict[str, QMainWindow] = {}
-
-        # Tab widget becomes the central area, tabs on top by default
-        self._mru = []
-        self.tabs = QTabWidget()
-        self.tabs.installEventFilter(NoShortcutFilter(self.tabs))
-        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
-        self.tabs.setDocumentMode(True)
-        self.tabs.setTabsClosable(True)
-        self.tabs.setContentsMargins(0, 0, 0, 0)
-        self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
-        self.tabs.tabBar().setExpanding(True)  # type: ignore
-        self.tabs.setStyleSheet(
-            self.tabs.styleSheet()
-            + """
+_tabbarStyle = """
 
 /* shrink tab height & padding */
 QTabBar::tab {
@@ -112,10 +50,39 @@ QTabBar::tab:!selected {
     color: palette(text);
 }
 """
-        )
 
+
+class TabbedMainWindow(QMainWindow):
+    @staticmethod
+    def _makeWindowInner(window: QMainWindow):
+        """Make adjustment to embedded window so it stays sanely within the tabbedmainwindow."""
+
+        # macOS has single global menubar for everything. unfortunately I don't know how to
+        # properly manage menubar across multiple embedded window. Here we just dictate
+        # the ui to show embedded menubar instead.
+        menuBar = window.menuBar()
+        if menuBar:
+            menuBar.setNativeMenuBar(False)
+
+    def __init__(self, mw):
+        super().__init__()
+
+        self.mw = mw
+        self._mru = []
+        self._windowMap: Dict[str, QMainWindow] = {}
+
+        self.tabs = QTabWidget()
+        self.tabs.installEventFilter(NoShortcutFilter(self.tabs))
+        self.tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setTabsClosable(True)
+        self.tabs.setContentsMargins(0, 0, 0, 0)
+        self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
+        self.tabs.tabBar().setExpanding(True)  # type: ignore
+        self.tabs.setStyleSheet(self.tabs.styleSheet() + _tabbarStyle)
         self.tabs.currentChanged.connect(self._onTabChange)
         self.tabs.tabCloseRequested.connect(self._onTabClose)
+        self.setCentralWidget(self.tabs)
 
         if not is_mac:
             shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
@@ -123,25 +90,36 @@ QTabBar::tab:!selected {
 
         # Create and add inner windows as tab pages
         self.addAndShowInnerWindow("AnkiQt", mw)
-        self.setCentralWidget(self.tabs)
 
-        # mark..
+        self.setWindowTitle("Anki")
+        # self.resize(mw.size())  TODO: resize according to anki layout.
+        self.setWindowIcon(mw.windowIcon())
+
+        # window closed handler. I think this is the best way of being notified
+        # when the window is closed.
+        #
+        # note that we cannot use WA_DeleteOnClose + deleted event commbo, since
+        # anki simply isn't built upon that. It has multiple leaking reference
+        # to closed window, so it shouldn't be deleted. Maybe we can override
+        # `closeEvent` instead, but I doubt that is stable either.
         oldMarkClosed = dialogs.markClosed
 
         def newMarkClosed(name: str):
-            debugLog.log("newMarkClosed %s" % (name,))
+            # debugLog.log("newMarkClosed %s" % (name,))
             oldMarkClosed(name)
             try:
                 window = self._windowMap[name]
             except KeyError:
                 return
-            debugLog.log(" - removing window %s" % (window,))
+            # debugLog.log(" - removing window %s" % (window,))
             self._onMarkClosed(window)
 
         dialogs.markClosed = newMarkClosed
 
-        # (Optional) programmatic navigation example:
-        # tabs.setCurrentIndex(1)  # select "InnerWindow2" on startup
+        # Show this window when mw should be shown.
+        oldShow = mw.show
+        mw.show = lambda: (self.show(), oldShow())
+        mw.hide = self.hide
 
     def _getWindowAssociatedMdiSubWindow(
         self, window: QMainWindow
@@ -183,7 +161,8 @@ QTabBar::tab:!selected {
             return
 
         mdiWindow = self._getWindowAssociatedMdiSubWindow(window)
-        self.tabs.setCurrentWidget(mdiWindow)
+        if mdiWindow:
+            self.tabs.setCurrentWidget(mdiWindow)
 
     def _closeCurrentTab(self):
         widget = self.tabs.currentWidget()
@@ -285,7 +264,7 @@ QTabBar::tab:!selected {
     # of builtins we override `__ne__` too.
     # https://stackoverflow.com/questions/4352244/should-ne-be-implemented-as-the-negation-of-eq
     def __ne__(self, other):
-        return not self == other
+        return not (self == other)
 
 
 newMainWindow = TabbedMainWindow(mw)
