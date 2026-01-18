@@ -54,42 +54,62 @@ class TabManager(QObject):
         """Create and attach a toolbar with tab bar to a window."""
         toolbar = QToolBar("Tabs")
         toolbar.setMovable(False)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.layout().setContentsMargins(0, 0, 0, 0)
+        toolbar.layout().setSpacing(0)
+        toolbar.setFloatable(False)
+        toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
+        toolbar.setStyleSheet(
+            """
+        QToolBar {
+            padding: 0px;
+            spacing: 0px;
+            border: none;
+        }
+        """
+        )
 
         tabbar = QTabBar()
         tabbar.setMovable(True)
         tabbar.setTabsClosable(True)
-        tabbar.setExpanding(True)  # Make tabs expand to fill width
+        tabbar.setContentsMargins(0, 0, 0, 0)
 
         # Make the tab bar widget itself expand horizontally
         tabbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         # Style the tab bar
-        tabbar.setStyleSheet("""
-/* shrink tab height & padding */
-QTabBar::tab {
-    height: 22px;               /* try 18-24px */
-    padding: 2px 8px;           /* vertical, horizontal */
-    margin: 0px;
-    border-bottom: 1px solid palette(mid);
-    border-right: 1px solid palette(mid);
-    /* optional: font-size: 11px; */
-}
-/* compact the pane edge */
-QTabWidget::pane {
-    border-top: 1px solid palette(mid);
-    margin: 0px;
-}
-QTabBar::tab:selected {
-    background: palette(highlight);
-    color: palette(highlight-text);
-    /* remove possible focus border */
-    outline: none;
-}
-QTabBar::tab:!selected {
-    background: palette(base);
-    color: palette(text);
-}
-""")
+        tabbar.setStyleSheet(
+            """
+        /* shrink tab height & padding */
+        QTabBar::tab {
+            height: 22px;               /* try 18-24px */
+            padding: 0px 8px;           /* vertical, horizontal */
+            margin: 0px;
+            border-bottom: 1px solid palette(mid);
+            border-right: 1px solid palette(mid);
+            /* optional: font-size: 11px; */
+        }
+        QTabBar::tab:last {
+            border-right: none;
+        }
+        /* compact the pane edge */
+        QTabWidget::pane {
+            border-top: 1px solid palette(mid);
+            margin: 0px;
+            padding: 0px;
+        }
+        QTabBar::tab:selected {
+            background: palette(highlight);
+            color: palette(highlight-text);
+            /* remove possible focus border */
+            outline: none;
+        }
+        QTabBar::tab:!selected {
+            background: palette(base);
+            color: palette(text);
+        }
+        """
+        )
 
         # Connect signals - need to identify which window this tab bar belongs to
         tabbar.currentChanged.connect(lambda idx: self._onTabChange(idx, window))
