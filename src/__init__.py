@@ -155,6 +155,9 @@ class TabOverlay(QMainWindow):
         # Remove event filter
         window.removeEventFilter(self)
 
+        # Block signals to prevent currentChanged from firing during tab removal
+        self.tabs.blockSignals(True)
+
         # Remove tab
         self.tabs.removeTab(idx)
 
@@ -167,12 +170,24 @@ class TabOverlay(QMainWindow):
 
         self._updateWidth()
 
-        # Focus next window in z-order
+        # Focus next window in z-order and update tab selection to match
         if self._tracked_windows:
-            self._tracked_windows[0].raise_()
-            self._tracked_windows[0].activateWindow()
+            next_window = self._tracked_windows[0]
+            next_window.raise_()
+            next_window.activateWindow()
+
+            # Find and select the tab for the next window
+            for tab_name, win in self._windowMap.items():
+                if win is next_window:
+                    next_idx = self._tabIndexMap[tab_name]
+                    self.tabs.setCurrentIndex(next_idx)
+                    break
+
             # Update overlay position to center on the new active window
             self.update_position()
+
+        # Re-enable signals
+        self.tabs.blockSignals(False)
 
         debugLog.log(f"Removed tab '{name}'")
 
