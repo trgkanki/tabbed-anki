@@ -367,8 +367,7 @@ class TabOverlay(QMainWindow):
 # Global tab overlay instance
 _tab_overlay: Optional[TabOverlay] = None
 
-
-wrappedDialogs = ["AddCards", "Browser", "EditCurrent"]
+wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
 
 _wrappedSet = set()
 
