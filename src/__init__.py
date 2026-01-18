@@ -29,12 +29,7 @@ from .utils import debugLog  # debug log registered here
 from aqt import mw, dialogs, gui_hooks
 from typing import Optional, Dict, List, cast
 from PyQt6.QtCore import Qt, QEvent, QObject
-from PyQt6.QtWidgets import (
-    QMainWindow,
-    QTabBar,
-    QToolBar,
-    QDialog,
-)
+from PyQt6.QtWidgets import QMainWindow, QTabBar, QToolBar, QDialog, QSizePolicy
 
 
 class TabManager(QObject):
@@ -63,20 +58,38 @@ class TabManager(QObject):
         tabbar = QTabBar()
         tabbar.setMovable(True)
         tabbar.setTabsClosable(True)
-        tabbar.setExpanding(False)
+        tabbar.setExpanding(True)  # Make tabs expand to fill width
+
+        # Make the tab bar widget itself expand horizontally
+        tabbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         # Style the tab bar
         tabbar.setStyleSheet("""
-            QTabBar::tab {
-                padding: 4px 12px;
-                font-size: 10px;
-                min-width: 80px;
-                max-width: 150px;
-            }
-            QTabBar::tab:selected {
-                font-weight: bold;
-            }
-        """)
+/* shrink tab height & padding */
+QTabBar::tab {
+    height: 22px;               /* try 18-24px */
+    padding: 2px 8px;           /* vertical, horizontal */
+    margin: 0px;
+    border-bottom: 1px solid palette(mid);
+    border-right: 1px solid palette(mid);
+    /* optional: font-size: 11px; */
+}
+/* compact the pane edge */
+QTabWidget::pane {
+    border-top: 1px solid palette(mid);
+    margin: 0px;
+}
+QTabBar::tab:selected {
+    background: palette(highlight);
+    color: palette(highlight-text);
+    /* remove possible focus border */
+    outline: none;
+}
+QTabBar::tab:!selected {
+    background: palette(base);
+    color: palette(text);
+}
+""")
 
         # Connect signals - need to identify which window this tab bar belongs to
         tabbar.currentChanged.connect(lambda idx: self._onTabChange(idx, window))
