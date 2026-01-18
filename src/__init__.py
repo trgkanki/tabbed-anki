@@ -28,14 +28,13 @@ from .utils import debugLog  # debug log registered here
 
 from aqt import mw, dialogs, gui_hooks
 from typing import Optional, Dict, List, cast
-from PyQt6.QtCore import Qt, QEvent, QObject, QTimer
+from PyQt6.QtCore import Qt, QEvent, QObject
 from PyQt6.QtWidgets import (
     QMainWindow,
     QTabBar,
     QWidget,
     QVBoxLayout,
     QDialog,
-    QApplication,
 )
 
 
@@ -76,8 +75,7 @@ class TabOverlay(QMainWindow):
         self.tabs.installEventFilter(self)
 
         # Style the tab bar to be more compact
-        self.tabs.setStyleSheet(
-            """
+        self.tabs.setStyleSheet("""
             QTabBar::tab {
                 padding: 4px 12px;
                 font-size: 10px;
@@ -87,8 +85,7 @@ class TabOverlay(QMainWindow):
             QTabBar::tab:selected {
                 font-weight: bold;
             }
-            """
-        )
+            """)
 
         # Add main window tab
         self._addAndFocusTab("Main", self.mw)
@@ -127,9 +124,9 @@ class TabOverlay(QMainWindow):
         self._tabIndexMap[name] = idx
         self.tabs.setCurrentIndex(idx)
 
-        # Track window in z-order list
+        # Track window for geometry sync
         if window not in self._tracked_windows:
-            self._tracked_windows.insert(0, window)  # Add at front (top)
+            self._tracked_windows.append(window)
 
         # Install event filter on the window
         window.installEventFilter(self)
@@ -170,22 +167,6 @@ class TabOverlay(QMainWindow):
 
         self._updateWidth()
 
-        # Focus next window in z-order and update tab selection to match
-        if self._tracked_windows:
-            next_window = self._tracked_windows[0]
-            next_window.raise_()
-            next_window.activateWindow()
-
-            # Find and select the tab for the next window
-            for tab_name, win in self._windowMap.items():
-                if win is next_window:
-                    next_idx = self._tabIndexMap[tab_name]
-                    self.tabs.setCurrentIndex(next_idx)
-                    break
-
-            # Update overlay position to center on the new active window
-            self.update_position()
-
         # Re-enable signals
         self.tabs.blockSignals(False)
 
@@ -222,17 +203,9 @@ class TabOverlay(QMainWindow):
 
         window = self._windowMap[tab_name]
 
-        # Update z-order
-        if window in self._tracked_windows:
-            self._tracked_windows.remove(window)
-        self._tracked_windows.insert(0, window)
-
         # Raise and activate window
         window.raise_()
         window.activateWindow()
-
-        # Update overlay position to follow the active window
-        self.update_position()
 
         debugLog.log(f"Switched to tab '{tab_name}'")
 
@@ -269,13 +242,13 @@ class TabOverlay(QMainWindow):
             self._sync_enabled = True
 
     def update_position(self):
-        """Position the tab overlay at the top of the topmost tracked window."""
+        """Position the tab overlay at the top of a tracked window."""
         if not self._tracked_windows:
             return
 
-        # Use the topmost tracked window as reference
-        top_window = self._tracked_windows[0]
-        geom = top_window.geometry()
+        # Use any tracked window as reference (they all have same geometry due to sync)
+        reference_window = self._tracked_windows[0]
+        geom = reference_window.geometry()
 
         # Center horizontally on the window
         center_x = geom.x() + (geom.width() // 2) - (self.width() // 2)
@@ -283,14 +256,6 @@ class TabOverlay(QMainWindow):
         top_y = geom.y() - self.height() + 2
 
         self.move(center_x, top_y)
-
-    def _checkIfShouldHide(self):
-        """Check if any tracked window is still active, hide overlay if not."""
-        active_window = QApplication.activeWindow()
-
-        # Hide overlay if no tracked window is active
-        if active_window not in self._tracked_windows:
-            self.hide()
 
     def eventFilter(self, a0: Optional[QObject], a1: Optional[QEvent]) -> bool:
         """Monitor events from tracked windows."""
@@ -313,41 +278,24 @@ class TabOverlay(QMainWindow):
                 self._syncWindowPositions(source)
                 self.update_position()
 
-        elif event.type() == QEvent.Type.WindowStateChange:
-            # Handle minimize/maximize
-            if source is self.mw:
-                if self.mw.isMinimized():
-                    self.hide()
-                    for window in self._tracked_windows:
-                        if window is not self.mw:
-                            window.hide()
-                else:
-                    self.show()
-                    for window in self._tracked_windows:
-                        if window is not self.mw:
-                            window.show()
-
         elif event.type() == QEvent.Type.WindowActivate:
-            # Window was activated, update z-order and tab selection
+            # Window was activated, update tab selection
             if isinstance(source, QMainWindow) and source in self._tracked_windows:
-                if self._tracked_windows[0] is not source:
-                    debugLog.log(f"WindowActivate: {source}")
-                    self._tracked_windows.remove(source)
-                    self._tracked_windows.insert(0, source)
+                debugLog.log(f"WindowActivate: {source}")
 
-                    # Update tab selection to match
-                    for name, window in self._windowMap.items():
-                        if window is source:
-                            idx = self._tabIndexMap[name]
-                            if self.tabs.currentIndex() != idx:
-                                debugLog.log(
-                                    f"Updating tab selection to '{name}' (index {idx})"
-                                )
-                                # Block signals to prevent triggering _onTabChange
-                                self.tabs.blockSignals(True)
-                                self.tabs.setCurrentIndex(idx)
-                                self.tabs.blockSignals(False)
-                            break
+                # Update tab selection to match
+                for name, window in self._windowMap.items():
+                    if window is source:
+                        idx = self._tabIndexMap[name]
+                        if self.tabs.currentIndex() != idx:
+                            debugLog.log(
+                                f"Updating tab selection to '{name}' (index {idx})"
+                            )
+                            # Block signals to prevent triggering _onTabChange
+                            self.tabs.blockSignals(True)
+                            self.tabs.setCurrentIndex(idx)
+                            self.tabs.blockSignals(False)
+                        break
                 # Show and raise the overlay when any tracked window is activated
                 self.show()
                 self.raise_()
@@ -356,8 +304,14 @@ class TabOverlay(QMainWindow):
         elif event.type() == QEvent.Type.WindowDeactivate:
             # Check if focus moved outside Anki windows
             if isinstance(source, QMainWindow) and source in self._tracked_windows:
-                # Use QTimer.singleShot to check after event processing completes
-                QTimer.singleShot(0, self._checkIfShouldHide)
+                # Hide overlay when any tracked window is deactivated
+                active_window = None
+                for window in self._tracked_windows:
+                    if window.isActiveWindow():
+                        active_window = window
+                        break
+                if active_window is None:
+                    self.hide()
 
         return super().eventFilter(a0, a1)
 
@@ -403,7 +357,7 @@ def wrapClass(clsName, cls):
 def newDialogsOpen(name: str, *args, **kwargs):
     if name in wrappedDialogs:
         if name not in _wrappedSet:
-            (creator, instance) = dialogs._dialogs[name]
+            creator, instance = dialogs._dialogs[name]
             if issubclass(creator, QDialog):
                 debugLog.log(
                     "error: %s is QDialog, which cannot be made as a tab." % (creator,)
