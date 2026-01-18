@@ -32,50 +32,41 @@ from PyQt6.QtCore import Qt, QEvent, QObject
 from PyQt6.QtWidgets import (
     QMainWindow,
     QTabBar,
-    QWidget,
-    QVBoxLayout,
+    QToolBar,
     QDialog,
 )
 
 
-class TabOverlay(QMainWindow):
+class TabManager(QObject):
     def __init__(self, main_window: QMainWindow):
         super().__init__()
-
         self.mw = main_window
         self._windowMap: Dict[str, QMainWindow] = {}  # dialog_name -> window
-        self._tabIndexMap: Dict[str, int] = {}  # dialog_name -> tab_index
-        self._tracked_windows: List[QMainWindow] = []  # All tracked windows in z-order
+        self._toolbars: Dict[QMainWindow, QToolBar] = {}  # window -> toolbar
+        self._tabBars: Dict[QMainWindow, QTabBar] = {}  # window -> tab bar
+        self._tracked_windows: List[QMainWindow] = []  # All tracked windows
         self._sync_enabled = (
             True  # Flag to temporarily disable sync during programmatic changes
         )
 
-        # Make the window frameless and transparent
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Add main window tab
+        self._addAndFocusTab("Main", self.mw)
 
-        # Create the Tab Bar
-        self.tabs = QTabBar()
-        self.tabs.setMovable(True)  # Allow drag-and-drop reordering
-        self.tabs.setTabsClosable(True)  # Add close buttons to tabs
-        self.tabs.setExpanding(False)  # Don't expand tabs to fill width
-        self.tabs.currentChanged.connect(self._onTabChange)
-        self.tabs.tabCloseRequested.connect(self._onTabCloseRequested)
+        # Hook into dialogs.markClosed for cleanup
+        self._hookDialogsClosed()
 
-        # Set initial opacity
-        self.setWindowOpacity(0.4)
+    def _createToolbarForWindow(self, window: QMainWindow) -> tuple[QToolBar, QTabBar]:
+        """Create and attach a toolbar with tab bar to a window."""
+        toolbar = QToolBar("Tabs")
+        toolbar.setMovable(False)
 
-        # Install event filter on tabs for hover detection
-        self.tabs.installEventFilter(self)
+        tabbar = QTabBar()
+        tabbar.setMovable(True)
+        tabbar.setTabsClosable(True)
+        tabbar.setExpanding(False)
 
-        # Style the tab bar to be more compact
-        self.tabs.setStyleSheet("""
+        # Style the tab bar
+        tabbar.setStyleSheet("""
             QTabBar::tab {
                 padding: 4px 12px;
                 font-size: 10px;
@@ -85,57 +76,106 @@ class TabOverlay(QMainWindow):
             QTabBar::tab:selected {
                 font-weight: bold;
             }
-            """)
+        """)
 
-        # Add main window tab
-        self._addAndFocusTab("Main", self.mw)
+        # Connect signals - need to identify which window this tab bar belongs to
+        tabbar.currentChanged.connect(lambda idx: self._onTabChange(idx, window))
+        tabbar.tabCloseRequested.connect(
+            lambda idx: self._onTabCloseRequested(idx, window)
+        )
 
-        # Layout
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.tabs)
+        toolbar.addWidget(tabbar)
+        window.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
-        container = QWidget()
-        container.setLayout(layout)
-        self.setCentralWidget(container)
+        return toolbar, tabbar
 
-        # Set tab bar dimensions
-        self.setFixedHeight(30)  # Smaller height
-        self._updateWidth()
+    def _syncAllTabBars(self):
+        """Synchronize all tab bars to show the same tabs in the same order."""
+        # Get canonical tab list from _windowMap
+        tab_names = list(self._windowMap.keys())
 
-        # Install event filters
-        self.mw.installEventFilter(self)
-        self.update_position()
+        for window, tabbar in self._tabBars.items():
+            # Block signals during rebuild
+            tabbar.blockSignals(True)
 
-        # Hook into dialogs.markClosed for cleanup
-        self._hookDialogsClosed()
+            # Clear and rebuild tabs
+            while tabbar.count() > 0:
+                tabbar.removeTab(0)
 
-    def _addAndFocusTab(self, name: str, window: QMainWindow) -> int:
+            for name in tab_names:
+                tabbar.addTab(name)
+
+            # Set current tab based on which window this is
+            current_name = None
+            for name, win in self._windowMap.items():
+                if win is window:
+                    current_name = name
+                    break
+
+            if current_name:
+                current_idx = tab_names.index(current_name)
+                tabbar.setCurrentIndex(current_idx)
+
+            tabbar.blockSignals(False)
+
+    def _updateCurrentTabIndicators(self, active_window: QMainWindow):
+        """Update which tab is highlighted as current across all tab bars."""
+        # Find the name of the active window
+        active_name = None
+        for name, window in self._windowMap.items():
+            if window is active_window:
+                active_name = name
+                break
+
+        if not active_name:
+            return
+
+        active_idx = list(self._windowMap.keys()).index(active_name)
+
+        # Update all tab bars
+        for window, tabbar in self._tabBars.items():
+            tabbar.blockSignals(True)
+            tabbar.setCurrentIndex(active_idx)
+            tabbar.blockSignals(False)
+
+    def _addAndFocusTab(self, name: str, window: QMainWindow):
         """Add a tab for a window and track it."""
         if name in self._windowMap:
-            # Window already tracked, just activate it
-            idx = self._tabIndexMap[name]
-            self.tabs.setCurrentIndex(idx)
-            return idx
+            # Already tracked, just focus it
+            window.raise_()
+            window.activateWindow()
+            self._updateCurrentTabIndicators(window)
+            return
 
-        # Add tab
-        idx = self.tabs.addTab(name)
+        # Add to window map
         self._windowMap[name] = window
-        self._tabIndexMap[name] = idx
-        self.tabs.setCurrentIndex(idx)
+
+        # If there are existing tracked windows, sync this new window TO their geometry
+        # (before it's shown, to avoid flickering)
+        if self._tracked_windows:
+            reference_window = self._tracked_windows[0]
+            if reference_window.isVisible():
+                geom = reference_window.geometry()
+                window.setGeometry(geom)
+                debugLog.log(f"Synced new window '{name}' to existing geometry")
 
         # Track window for geometry sync
         if window not in self._tracked_windows:
             self._tracked_windows.append(window)
 
+        # Create toolbar if this window doesn't have one yet
+        if window not in self._toolbars:
+            toolbar, tabbar = self._createToolbarForWindow(window)
+            self._toolbars[window] = toolbar
+            self._tabBars[window] = tabbar
+
         # Install event filter on the window
         window.installEventFilter(self)
 
-        self._updateWidth()
-        self.update_position()
+        # Sync all tab bars to include the new tab
+        self._syncAllTabBars()
 
-        debugLog.log(f"Added tab '{name}' at index {idx}")
-        return idx
+        debugLog.log(f"Added tab '{name}'")
 
     def _removeTab(self, name: str):
         """Remove a tab and stop tracking the window."""
@@ -143,78 +183,57 @@ class TabOverlay(QMainWindow):
             return
 
         window = self._windowMap[name]
-        idx = self._tabIndexMap[name]
 
         # Remove from tracking
         if window in self._tracked_windows:
             self._tracked_windows.remove(window)
 
+        # Remove toolbar if this window is closing
+        if window in self._toolbars:
+            window.removeToolBar(self._toolbars[window])
+            del self._toolbars[window]
+            del self._tabBars[window]
+
         # Remove event filter
         window.removeEventFilter(self)
 
-        # Block signals to prevent currentChanged from firing during tab removal
-        self.tabs.blockSignals(True)
-
-        # Remove tab
-        self.tabs.removeTab(idx)
-
-        # Update maps
+        # Remove from window map
         del self._windowMap[name]
-        del self._tabIndexMap[name]
 
-        # Rebuild tab index map
-        self._rebuildTabIndexMap()
-
-        self._updateWidth()
-
-        # Re-enable signals
-        self.tabs.blockSignals(False)
+        # Sync remaining tab bars
+        self._syncAllTabBars()
 
         debugLog.log(f"Removed tab '{name}'")
 
-    def _rebuildTabIndexMap(self):
-        """Rebuild the tab index map after tab removal."""
-        self._tabIndexMap.clear()
-        for idx in range(self.tabs.count()):
-            tab_name = self.tabs.tabText(idx)
-            self._tabIndexMap[tab_name] = idx
-
-    def _updateWidth(self):
-        """Update tab bar width dynamically based on actual tab sizes."""
-        # Calculate actual width needed for all tabs
-        total_width = 0
-        for i in range(self.tabs.count()):
-            # Get the size hint for each tab
-            tab_rect = self.tabs.tabRect(i)
-            total_width += tab_rect.width()
-
-        # Set min/max bounds
-        width = min(1000, total_width)
-        self.setFixedWidth(width)
-
-    def _onTabChange(self, index: int):
-        """Handle tab selection change."""
+    def _onTabChange(self, index: int, source_window: QMainWindow):
+        """Handle tab selection change from any tab bar."""
         if index < 0:
             return
 
-        tab_name = self.tabs.tabText(index)
+        # Get tab name from any tab bar (they're all synced)
+        tab_name = list(self._windowMap.keys())[index]
+
         if tab_name not in self._windowMap:
             return
 
-        window = self._windowMap[tab_name]
+        target_window = self._windowMap[tab_name]
 
-        # Raise and activate window
-        window.raise_()
-        window.activateWindow()
+        # Raise and activate the target window
+        target_window.raise_()
+        target_window.activateWindow()
+
+        # Update current tab indicators across all tab bars
+        self._updateCurrentTabIndicators(target_window)
 
         debugLog.log(f"Switched to tab '{tab_name}'")
 
-    def _onTabCloseRequested(self, index: int):
+    def _onTabCloseRequested(self, index: int, source_window: QMainWindow):
         """Handle close button click on a tab."""
         if index < 0:
             return
 
-        tab_name = self.tabs.tabText(index)
+        # Get tab name from index (all tab bars are synced)
+        tab_name = list(self._windowMap.keys())[index]
         if tab_name not in self._windowMap:
             return
 
@@ -241,22 +260,6 @@ class TabOverlay(QMainWindow):
         finally:
             self._sync_enabled = True
 
-    def update_position(self):
-        """Position the tab overlay at the top of a tracked window."""
-        if not self._tracked_windows:
-            return
-
-        # Use any tracked window as reference (they all have same geometry due to sync)
-        reference_window = self._tracked_windows[0]
-        geom = reference_window.geometry()
-
-        # Center horizontally on the window
-        center_x = geom.x() + (geom.width() // 2) - (self.width() // 2)
-        # Position at the top, overlapping slightly
-        top_y = geom.y() - self.height() + 2
-
-        self.move(center_x, top_y)
-
     def eventFilter(self, a0: Optional[QObject], a1: Optional[QEvent]) -> bool:
         """Monitor events from tracked windows."""
         if a0 is None or a1 is None:
@@ -265,53 +268,17 @@ class TabOverlay(QMainWindow):
         source = a0
         event = a1
 
-        # Handle hover events on the tab bar for opacity changes
-        if source is self.tabs:
-            if event.type() == QEvent.Type.Enter:
-                self.setWindowOpacity(1.0)
-            elif event.type() == QEvent.Type.Leave:
-                self.setWindowOpacity(0.4)
-
         if event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
-            # If main window or any tracked window moves/resizes, sync all windows
+            # Sync all windows on move/resize (only if source window is visible)
             if isinstance(source, QMainWindow) and source in self._tracked_windows:
-                self._syncWindowPositions(source)
-                self.update_position()
+                if source.isVisible():
+                    self._syncWindowPositions(source)
 
         elif event.type() == QEvent.Type.WindowActivate:
-            # Window was activated, update tab selection
+            # Update tab selection when window is activated
             if isinstance(source, QMainWindow) and source in self._tracked_windows:
                 debugLog.log(f"WindowActivate: {source}")
-
-                # Update tab selection to match
-                for name, window in self._windowMap.items():
-                    if window is source:
-                        idx = self._tabIndexMap[name]
-                        if self.tabs.currentIndex() != idx:
-                            debugLog.log(
-                                f"Updating tab selection to '{name}' (index {idx})"
-                            )
-                            # Block signals to prevent triggering _onTabChange
-                            self.tabs.blockSignals(True)
-                            self.tabs.setCurrentIndex(idx)
-                            self.tabs.blockSignals(False)
-                        break
-                # Show and raise the overlay when any tracked window is activated
-                self.show()
-                self.raise_()
-                self.update_position()
-
-        elif event.type() == QEvent.Type.WindowDeactivate:
-            # Check if focus moved outside Anki windows
-            if isinstance(source, QMainWindow) and source in self._tracked_windows:
-                # Hide overlay when any tracked window is deactivated
-                active_window = None
-                for window in self._tracked_windows:
-                    if window.isActiveWindow():
-                        active_window = window
-                        break
-                if active_window is None:
-                    self.hide()
+                self._updateCurrentTabIndicators(source)
 
         return super().eventFilter(a0, a1)
 
@@ -323,18 +290,18 @@ class TabOverlay(QMainWindow):
             debugLog.log(f"dialogs.markClosed called: {name}")
             result = _old_mark_closed(name)
 
-            # Remove tab for this window - check if TabOverlay still exists
-            global _tab_overlay
-            if _tab_overlay is not None:
-                _tab_overlay._removeTab(name)
+            # Remove tab for this window - check if TabManager still exists
+            global _tab_manager
+            if _tab_manager is not None:
+                _tab_manager._removeTab(name)
 
             return result
 
         dialogs.markClosed = new_mark_closed
 
 
-# Global tab overlay instance
-_tab_overlay: Optional[TabOverlay] = None
+# Global tab manager instance
+_tab_manager: Optional[TabManager] = None
 
 wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
 
@@ -347,8 +314,8 @@ def wrapClass(clsName, cls):
     oldShow = cls.show
 
     def newShow(self):
-        if _tab_overlay:
-            _tab_overlay._addAndFocusTab(clsName, self)
+        if _tab_manager:
+            _tab_manager._addAndFocusTab(clsName, self)
         oldShow(self)
 
     cls.show = newShow
@@ -374,30 +341,28 @@ dialogs.open = newDialogsOpen
 
 
 def init_tab_overlay():
-    """Initialize the tab overlay when main window is shown."""
-    global _tab_overlay
+    """Initialize the tab manager when main window is shown."""
+    global _tab_manager
 
-    if _tab_overlay is None and mw is not None:
-        _tab_overlay = TabOverlay(mw)
-        _tab_overlay.show()
-        debugLog.log("Tab overlay initialized")
+    if _tab_manager is None and mw is not None:
+        _tab_manager = TabManager(mw)
+        debugLog.log("Tab manager initialized")
 
 
 def cleanup_tab_overlay():
-    """Cleanup the tab overlay when main window is destroyed."""
-    global _tab_overlay
+    """Cleanup the tab manager when main window is destroyed."""
+    global _tab_manager
 
-    if _tab_overlay is not None:
-        debugLog.log("Cleaning up tab overlay")
+    if _tab_manager is not None:
+        debugLog.log("Cleaning up tab manager")
 
-        # Remove event filters from all tracked windows
-        for window in _tab_overlay._tracked_windows:
-            window.removeEventFilter(_tab_overlay)
+        # Remove event filters and toolbars from all tracked windows
+        for window in _tab_manager._tracked_windows:
+            window.removeEventFilter(_tab_manager)
+            if window in _tab_manager._toolbars:
+                window.removeToolBar(_tab_manager._toolbars[window])
 
-        # Close and delete the overlay
-        _tab_overlay.close()
-        _tab_overlay.deleteLater()
-        _tab_overlay = None
+        _tab_manager = None
 
 
 # Hook to main window's lifecycle events
