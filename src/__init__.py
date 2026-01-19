@@ -324,9 +324,7 @@ class TabManager(QObject):
             result = _old_mark_closed(name)
 
             # Remove tab for this window - check if TabManager still exists
-            global _tab_manager
-            if _tab_manager is not None:
-                _tab_manager._removeTab(name)
+            _tab_manager._removeTab(name)
 
             return result
 
@@ -334,7 +332,7 @@ class TabManager(QObject):
 
 
 # Global tab manager instance
-_tab_manager: Optional[TabManager] = None
+_tab_manager = TabManager(mw)
 
 wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
 
@@ -347,8 +345,7 @@ def wrapClass(clsName, cls):
     oldShow = cls.show
 
     def newShow(self):
-        if _tab_manager:
-            _tab_manager._addAndFocusTab(clsName, self)
+        _tab_manager._addAndFocusTab(clsName, self)
         oldShow(self)
 
     cls.show = newShow
@@ -369,49 +366,3 @@ def newDialogsOpen(name: str, *args, **kwargs):
 
 
 dialogs.open = newDialogsOpen
-
-####
-
-
-def init_tab_overlay():
-    """Initialize the tab manager when main window is shown."""
-    global _tab_manager
-
-    if _tab_manager is None and mw is not None:
-        _tab_manager = TabManager(mw)
-        debugLog.log("Tab manager initialized")
-
-
-def cleanup_tab_overlay():
-    """Cleanup the tab manager when main window is destroyed."""
-    global _tab_manager
-
-    if _tab_manager is not None:
-        debugLog.log("Cleaning up tab manager")
-
-        # Remove event filters and toolbars from all tracked windows
-        for window in _tab_manager._tracked_windows:
-            window.removeEventFilter(_tab_manager)
-            if window in _tab_manager._toolbars:
-                window.removeToolBar(_tab_manager._toolbars[window])
-
-        _tab_manager = None
-
-
-# Hook to main window's lifecycle events
-original_showEvent = mw.showEvent
-original_hideEvent = mw.hideEvent
-
-
-def new_showEvent(event):
-    original_showEvent(event)
-    init_tab_overlay()
-
-
-def new_hideEvent(event):
-    cleanup_tab_overlay()
-    original_hideEvent(event)
-
-
-mw.showEvent = new_showEvent
-mw.hideEvent = new_hideEvent
