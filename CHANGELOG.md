@@ -1,4 +1,4 @@
-# Changelog of tabbed
+# Changelog of tabbed-anki
 
 [comment]: # (DO NOT MODIFY. new changelog goes here)
 
