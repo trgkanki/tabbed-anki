@@ -1,3 +1,11 @@
 {
-    "debug": false
+    "debug": false,
+    "sync_geometry": {
+        "Main": true,
+        "AddCards": true,
+        "Browser": true,
+        "EditCurrent": true,
+        "DeckStats": true,
+        "NewDeckStats": true
+    }
 }

@@ -25,6 +25,7 @@
 from .utils import openChangelog
 from .utils import uuid  # duplicate UUID checked here
 from .utils import debugLog  # debug log registered here
+from .utils.configrw import getConfig
 
 from aqt import mw, dialogs, gui_hooks
 from typing import Optional, Dict, List, cast
@@ -39,8 +40,8 @@ class TabManager(QObject):
         self._windowMap: Dict[str, QMainWindow] = {}  # dialog_name -> window
         self._toolbars: Dict[QMainWindow, QToolBar] = {}  # window -> toolbar
         self._tabBars: Dict[QMainWindow, QTabBar] = {}  # window -> tab bar
-        self._tracked_windows: List[QMainWindow] = []  # All tracked windows
-        self._sync_enabled = (
+        self._geometry_synced_windows: List[QMainWindow] = []  # All tracked windows
+        self._geometry_sync_enabled = (
             True  # Flag to temporarily disable sync during programmatic changes
         )
 
@@ -185,16 +186,21 @@ class TabManager(QObject):
 
         # If there are existing tracked windows, sync this new window TO their geometry
         # (before it's shown, to avoid flickering)
-        if self._tracked_windows:
-            reference_window = self._tracked_windows[0]
-            if reference_window.isVisible():
-                geom = reference_window.geometry()
-                window.setGeometry(geom)
-                debugLog.log(f"Synced new window '{name}' to existing geometry")
 
-        # Track window for geometry sync
-        if window not in self._tracked_windows:
-            self._tracked_windows.append(window)
+        sync_geometry_config = getConfig("sync_geometry")
+        if sync_geometry_config.get(name, False):
+            debugLog.log("_addAndFocusTab: new geometry synced window %s" % name)
+            if self._geometry_synced_windows:
+                reference_window = self._geometry_synced_windows[0]
+                if reference_window.isVisible():
+                    geom = reference_window.geometry()
+                    window.setGeometry(geom)
+                    debugLog.log(f"Synced new window '{name}' to existing geometry")
+
+            # Track window for geometry sync
+            if window not in self._geometry_synced_windows:
+                debugLog.log("adding to _geometry_synced_windows")
+                self._geometry_synced_windows.append(window)
 
         # Create toolbar if this window doesn't have one yet
         if window not in self._toolbars:
@@ -218,8 +224,8 @@ class TabManager(QObject):
         window = self._windowMap[name]
 
         # Remove from tracking
-        if window in self._tracked_windows:
-            self._tracked_windows.remove(window)
+        if window in self._geometry_synced_windows:
+            self._geometry_synced_windows.remove(window)
 
         # Remove toolbar if this window is closing
         if window in self._toolbars:
@@ -279,19 +285,19 @@ class TabManager(QObject):
 
     def _syncWindowPositions(self, reference_window: QMainWindow):
         """Synchronize all tracked windows to the reference window's position and size."""
-        if not self._sync_enabled:
+        if not self._geometry_sync_enabled:
             return
 
         geom = reference_window.geometry()
 
         # Temporarily disable sync to prevent recursive updates
-        self._sync_enabled = False
+        self._geometry_sync_enabled = False
         try:
-            for window in self._tracked_windows:
+            for window in self._geometry_synced_windows:
                 if window is not reference_window:
                     window.setGeometry(geom)
         finally:
-            self._sync_enabled = True
+            self._geometry_sync_enabled = True
 
     def eventFilter(self, a0: Optional[QObject], a1: Optional[QEvent]) -> bool:
         """Monitor events from tracked windows."""
@@ -303,13 +309,16 @@ class TabManager(QObject):
 
         if event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
             # Sync all windows on move/resize (only if source window is visible)
-            if isinstance(source, QMainWindow) and source in self._tracked_windows:
+            if (
+                isinstance(source, QMainWindow)
+                and source in self._geometry_synced_windows
+            ):
                 if source.isVisible():
                     self._syncWindowPositions(source)
 
         elif event.type() == QEvent.Type.WindowActivate:
             # Update tab selection when window is activated
-            if isinstance(source, QMainWindow) and source in self._tracked_windows:
+            if isinstance(source, QMainWindow) and source in self._windowMap.values():
                 debugLog.log(f"WindowActivate: {source}")
                 self._updateCurrentTabIndicators(source)
 
