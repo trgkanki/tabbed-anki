@@ -29,7 +29,8 @@ from .utils.configrw import getConfig
 
 from aqt import mw, dialogs, gui_hooks
 from typing import Optional, Dict, List, cast
-from PyQt6.QtCore import Qt, QEvent, QObject
+from PyQt6 import sip
+from PyQt6.QtCore import Qt, QEvent, QObject, QTimer
 from PyQt6.QtWidgets import QMainWindow, QTabBar, QToolBar, QDialog, QSizePolicy
 
 
@@ -60,15 +61,13 @@ class TabManager(QObject):
         toolbar.layout().setSpacing(0)
         toolbar.setFloatable(False)
         toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
-        toolbar.setStyleSheet(
-            """
+        toolbar.setStyleSheet("""
         QToolBar {
             padding: 0px;
             spacing: 0px;
             border: none;
         }
-        """
-        )
+        """)
 
         tabbar = QTabBar()
         tabbar.setMovable(True)
@@ -79,8 +78,7 @@ class TabManager(QObject):
         tabbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         # Style the tab bar
-        tabbar.setStyleSheet(
-            """
+        tabbar.setStyleSheet("""
         /* shrink tab height & padding */
         QTabBar::tab {
             height: 22px;               /* try 18-24px */
@@ -109,8 +107,7 @@ class TabManager(QObject):
             background: palette(base);
             color: palette(text);
         }
-        """
-        )
+        """)
 
         # Connect signals - need to identify which window this tab bar belongs to
         tabbar.currentChanged.connect(lambda idx: self._onTabChange(idx, window))
@@ -121,9 +118,11 @@ class TabManager(QObject):
         toolbar.addWidget(tabbar)
         window.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
-        return toolbar, tabbar
+        self._toolbars[window] = toolbar
+        self._tabBars[window] = tabbar
 
     def _syncAllTabBars(self):
+        debugLog.log("Synchronizing all tab bars")
         """Synchronize all tab bars to show the same tabs in the same order."""
         # Get canonical tab list from _windowMap
         tab_names = list(self._windowMap.keys())
@@ -204,15 +203,14 @@ class TabManager(QObject):
 
         # Create toolbar if this window doesn't have one yet
         if window not in self._toolbars:
-            toolbar, tabbar = self._createToolbarForWindow(window)
-            self._toolbars[window] = toolbar
-            self._tabBars[window] = tabbar
+            self._createToolbarForWindow(window)
 
         # Install event filter on the window
         window.installEventFilter(self)
 
         # Sync all tab bars to include the new tab
         self._syncAllTabBars()
+        self._updateCurrentTabIndicators(window)
 
         debugLog.log(f"Added tab '{name}'")
 
@@ -354,8 +352,12 @@ def wrapClass(clsName, cls):
     oldShow = cls.show
 
     def newShow(self):
-        _tab_manager._addAndFocusTab(clsName, self)
-        oldShow(self)
+        def callback():
+            if not sip.isdeleted(self):
+                _tab_manager._addAndFocusTab(clsName, self)
+
+        QTimer.singleShot(0, callback)
+        return oldShow(self)
 
     cls.show = newShow
 
