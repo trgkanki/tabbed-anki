@@ -33,6 +33,36 @@ from PyQt6 import sip
 from PyQt6.QtCore import Qt, QEvent, QObject, QTimer
 from PyQt6.QtWidgets import QMainWindow, QTabBar, QToolBar, QDialog, QSizePolicy
 
+import sys
+import ctypes
+
+
+def force_activate_window(qwindow):
+    if sys.platform == "win32":
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        SW_RESTORE = 9
+
+        hwnd = int(qwindow.winId())
+
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
+
+        foreground = user32.GetForegroundWindow()
+        current_thread = kernel32.GetCurrentThreadId()
+        foreground_thread = user32.GetWindowThreadProcessId(foreground, None)
+
+        user32.AttachThreadInput(current_thread, foreground_thread, True)
+        try:
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+        finally:
+            user32.AttachThreadInput(current_thread, foreground_thread, False)
+
+    qwindow.raise_()
+    qwindow.activateWindow()
+
 
 class TabManager(QObject):
     def __init__(self, main_window: QMainWindow):
@@ -256,8 +286,7 @@ class TabManager(QObject):
         target_window = self._windowMap[tab_name]
 
         # Raise and activate the target window
-        target_window.raise_()
-        target_window.activateWindow()
+        force_activate_window(target_window)
 
         # Update current tab indicators across all tab bars
         self._updateCurrentTabIndicators(target_window)
