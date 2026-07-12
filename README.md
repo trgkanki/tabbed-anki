@@ -1,18 +1,8 @@
 # Tabbed Anki
 
+[View on AnkiWeb addon page](https://ankiweb.net/shared/info/916531152)
+
 Manage various anki windows with tabs. Useful when reviewing in small form factor screens or split screens.
 
-![example](images/example.png)
-
-## How to install
-
-* Prerequisite
-  * Python 3
-  * node.js
-
-```sh
-git clone https://github.com/trgkanki/tabbed-anki/
-cd tabbed-anki
-npm i
-npm run link
-```
+![example](images/Anki_FtKbh2HpFW.png)
+![example](images/Anki_L4dUjvNbTf.png)
