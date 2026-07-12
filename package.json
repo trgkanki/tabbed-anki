@@ -1,6 +1,6 @@
 {
   "name": "tabbed-anki",
-  "version": "26.1.19i98",
+  "version": "26.7.12i31",
   "description": "template for trgkanki's addon",
   "scripts": {
     "postinstall": "echo \"Make sure to install pipx on your environment! (npx analogue for python)\"",

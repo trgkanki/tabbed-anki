@@ -2,6 +2,11 @@
 
 [comment]: # (DO NOT MODIFY. new changelog goes here)
 
+## 26.7.12i31 (2026-07-12)
+
+- Works for macOS!
+- Tab change works more consistently on windows.
+
 ## 26.1.19i98 (2026-01-19)
 
 Complete reimplementation. Now this addon is "userland": much less to cause severe errors.
