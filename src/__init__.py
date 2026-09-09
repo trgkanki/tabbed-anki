@@ -66,27 +66,31 @@ def force_activate_window(qwindow):
 
 
 class WindowInfo(NamedTuple):
-    kind: str  # dialog kind name, e.g. "Browser"
-    label: str  # display label shown on its tab, e.g. "Browser (2)"
+    """kind is Anki's own dialog-type name (stable; used for config lookups
+    and to match dialogs.markClosed's argument). label is what's shown on
+    the tab, and only equals kind for the first window of that kind -- see
+    TabManager._makeLabel."""
+
+    kind: str
+    label: str
 
 
 class TabManager(QObject):
     def __init__(self, main_window: QMainWindow):
         super().__init__()
         self.mw = main_window
-        self._windowMap: Dict[QMainWindow, WindowInfo] = {}  # window -> info
-        self._kindCounters: Dict[str, int] = {}  # kind -> label counter
-        self._toolbars: Dict[QMainWindow, QToolBar] = {}  # window -> toolbar
-        self._tabBars: Dict[QMainWindow, QTabBar] = {}  # window -> tab bar
-        self._geometry_synced_windows: List[QMainWindow] = []  # All tracked windows
-        self._geometry_sync_enabled = (
-            True  # Flag to temporarily disable sync during programmatic changes
-        )
+        self._windowMap: Dict[QMainWindow, WindowInfo] = {}
+        self._kindCounters: Dict[str, int] = {}
+        self._toolbars: Dict[QMainWindow, QToolBar] = {}
+        self._tabBars: Dict[QMainWindow, QTabBar] = {}
+        # only windows opted into sync_geometry (see _addAndFocusTab), not
+        # every tracked window
+        self._geometry_synced_windows: List[QMainWindow] = []
+        # disabled temporarily while we set geometry programmatically, so
+        # that doesn't itself re-trigger a sync (see _syncWindowPositions)
+        self._geometry_sync_enabled = True
 
-        # Add main window tab
         self._addAndFocusTab("Main", self.mw)
-
-        # Hook into dialogs.markClosed for cleanup
         self._hookDialogsClosed()
 
     def _createToolbarForWindow(self, window: QMainWindow) -> tuple[QToolBar, QTabBar]:
@@ -111,10 +115,8 @@ class TabManager(QObject):
         tabbar.setTabsClosable(True)
         tabbar.setContentsMargins(0, 0, 0, 0)
 
-        # Make the tab bar widget itself expand horizontally
         tabbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        # Style the tab bar
         tabbar.setStyleSheet("""
         /* shrink tab height & padding */
         QTabBar::tab {
@@ -146,7 +148,8 @@ class TabManager(QObject):
         }
         """)
 
-        # Connect signals - need to identify which window this tab bar belongs to
+        # `window` is captured here so the callback knows which window this
+        # tab bar belongs to -- the signal itself doesn't carry that
         tabbar.currentChanged.connect(lambda idx: self._onTabChange(idx, window))
         tabbar.tabCloseRequested.connect(
             lambda idx: self._onTabCloseRequested(idx, window)
@@ -159,17 +162,16 @@ class TabManager(QObject):
         self._tabBars[window] = tabbar
 
     def _syncAllTabBars(self):
-        debugLog.log("Synchronizing all tab bars")
         """Synchronize all tab bars to show the same tabs in the same order."""
-        # Get canonical tab list from _windowMap (insertion-ordered)
+        debugLog.log("Synchronizing all tab bars")
+        # dict preserves insertion order, so this doubles as the tab order
         windows = list(self._windowMap.keys())
         labels = [self._windowMap[w].label for w in windows]
 
         for window, tabbar in self._tabBars.items():
-            # Block signals during rebuild
+            # avoid spurious _onTabChange while we tear down and rebuild tabs
             tabbar.blockSignals(True)
 
-            # Clear and rebuild tabs
             while tabbar.count() > 0:
                 tabbar.removeTab(0)
 
@@ -189,7 +191,6 @@ class TabManager(QObject):
 
         active_idx = list(self._windowMap.keys()).index(active_window)
 
-        # Update all tab bars
         for window, tabbar in self._tabBars.items():
             tabbar.blockSignals(True)
             tabbar.setCurrentIndex(active_idx)
@@ -223,20 +224,16 @@ class TabManager(QObject):
         "already tracked".
         """
         if window in self._windowMap:
-            # Already tracked, just focus it
             window.raise_()
             window.activateWindow()
             self._updateCurrentTabIndicators(window)
             return
 
-        # Add to window map, disambiguating the label if another window of
-        # the same kind is already open
         label = self._makeLabel(name)
         self._windowMap[window] = WindowInfo(kind=name, label=label)
 
-        # If there are existing tracked windows, sync this new window TO their geometry
-        # (before it's shown, to avoid flickering)
-
+        # sync geometry to existing windows before this one is shown, to
+        # avoid a visible jump into place
         sync_geometry_config = getConfig("sync_geometry")
         if sync_geometry_config.get(name, False):
             debugLog.log("_addAndFocusTab: new geometry synced window %s" % name)
@@ -247,19 +244,15 @@ class TabManager(QObject):
                     window.setGeometry(geom)
                     debugLog.log(f"Synced new window '{name}' to existing geometry")
 
-            # Track window for geometry sync
             if window not in self._geometry_synced_windows:
                 debugLog.log("adding to _geometry_synced_windows")
                 self._geometry_synced_windows.append(window)
 
-        # Create toolbar if this window doesn't have one yet
         if window not in self._toolbars:
             self._createToolbarForWindow(window)
 
-        # Install event filter on the window
         window.installEventFilter(self)
 
-        # Sync all tab bars to include the new tab
         self._syncAllTabBars()
         self._updateCurrentTabIndicators(window)
 
@@ -273,20 +266,15 @@ class TabManager(QObject):
         kind = self._windowMap[window].kind
         label = self._windowMap[window].label
 
-        # Remove from tracking
         if window in self._geometry_synced_windows:
             self._geometry_synced_windows.remove(window)
 
-        # Remove toolbar if this window is closing
         if window in self._toolbars:
             window.removeToolBar(self._toolbars[window])
             del self._toolbars[window]
             del self._tabBars[window]
 
-        # Remove event filter
         window.removeEventFilter(self)
-
-        # Remove from window map
         del self._windowMap[window]
 
         # Once no window of this kind remains open, reset its label counter
@@ -294,9 +282,7 @@ class TabManager(QObject):
         if not any(info.kind == kind for info in self._windowMap.values()):
             self._kindCounters.pop(kind, None)
 
-        # Sync remaining tab bars
         self._syncAllTabBars()
-
         debugLog.log(f"Removed tab '{label}'")
 
     def _removeTabFallback(self, name: str):
@@ -327,16 +313,13 @@ class TabManager(QObject):
         if index < 0:
             return
 
-        # Get window from index (all tab bars are synced)
+        # all tab bars are kept in sync, so this index applies to any of them
         windows = list(self._windowMap.keys())
         if index >= len(windows):
             return
         target_window = windows[index]
 
-        # Raise and activate the target window
         force_activate_window(target_window)
-
-        # Update current tab indicators across all tab bars
         self._updateCurrentTabIndicators(target_window)
 
         debugLog.log(f"Switched to tab '{self._windowMap[target_window].label}'")
@@ -346,13 +329,13 @@ class TabManager(QObject):
         if index < 0:
             return
 
-        # Get window from index (all tab bars are synced)
         windows = list(self._windowMap.keys())
         if index >= len(windows):
             return
         window = windows[index]
 
-        # Close the window (this will trigger dialogs.markClosed)
+        # closing triggers dialogs.markClosed, which is what actually
+        # removes this window's tracking/tab (see _hookDialogsClosed)
         if window is not self.mw:
             window.close()
         debugLog.log(f"Close requested for tab '{self._windowMap[window].label}'")
@@ -364,7 +347,7 @@ class TabManager(QObject):
 
         geom = reference_window.geometry()
 
-        # Temporarily disable sync to prevent recursive updates
+        # disabled while applying, so setGeometry below doesn't re-trigger this
         self._geometry_sync_enabled = False
         try:
             for window in self._geometry_synced_windows:
@@ -382,16 +365,14 @@ class TabManager(QObject):
         event = a1
 
         if event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
-            # Sync all windows on move/resize (only if source window is visible)
             if (
                 isinstance(source, QMainWindow)
                 and source in self._geometry_synced_windows
             ):
-                if source.isVisible():
+                if source.isVisible():  # geometry isn't meaningful while hidden
                     self._syncWindowPositions(source)
 
         elif event.type() == QEvent.Type.WindowActivate:
-            # Update tab selection when window is activated
             if isinstance(source, QMainWindow) and source in self._windowMap:
                 debugLog.log(f"WindowActivate: {source}")
                 self._updateCurrentTabIndicators(source)
@@ -460,7 +441,6 @@ class TabManager(QObject):
         dialogs.markClosed = new_mark_closed
 
 
-# Global tab manager instance
 _tab_manager = TabManager(mw)
 
 wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
