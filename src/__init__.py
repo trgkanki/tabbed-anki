@@ -28,13 +28,14 @@ from .utils import debugLog  # debug log registered here
 from .utils.configrw import getConfig
 
 from aqt import mw, dialogs, gui_hooks
-from typing import Optional, Dict, List, cast
+from typing import Optional, Dict, List, NamedTuple, cast
 from PyQt6 import sip
 from PyQt6.QtCore import Qt, QEvent, QObject, QTimer
 from PyQt6.QtWidgets import QMainWindow, QTabBar, QToolBar, QDialog, QSizePolicy
 
 import sys
 import ctypes
+import inspect
 
 
 def force_activate_window(qwindow):
@@ -64,11 +65,17 @@ def force_activate_window(qwindow):
     qwindow.activateWindow()
 
 
+class WindowInfo(NamedTuple):
+    kind: str  # dialog kind name, e.g. "Browser"
+    label: str  # display label shown on its tab, e.g. "Browser (2)"
+
+
 class TabManager(QObject):
     def __init__(self, main_window: QMainWindow):
         super().__init__()
         self.mw = main_window
-        self._windowMap: Dict[str, QMainWindow] = {}  # dialog_name -> window
+        self._windowMap: Dict[QMainWindow, WindowInfo] = {}  # window -> info
+        self._kindCounters: Dict[str, int] = {}  # kind -> label counter
         self._toolbars: Dict[QMainWindow, QToolBar] = {}  # window -> toolbar
         self._tabBars: Dict[QMainWindow, QTabBar] = {}  # window -> tab bar
         self._geometry_synced_windows: List[QMainWindow] = []  # All tracked windows
@@ -154,8 +161,9 @@ class TabManager(QObject):
     def _syncAllTabBars(self):
         debugLog.log("Synchronizing all tab bars")
         """Synchronize all tab bars to show the same tabs in the same order."""
-        # Get canonical tab list from _windowMap
-        tab_names = list(self._windowMap.keys())
+        # Get canonical tab list from _windowMap (insertion-ordered)
+        windows = list(self._windowMap.keys())
+        labels = [self._windowMap[w].label for w in windows]
 
         for window, tabbar in self._tabBars.items():
             # Block signals during rebuild
@@ -165,35 +173,21 @@ class TabManager(QObject):
             while tabbar.count() > 0:
                 tabbar.removeTab(0)
 
-            for name in tab_names:
-                tabbar.addTab(name)
+            for label in labels:
+                tabbar.addTab(label)
 
-            # Set current tab based on which window this is
-            current_name = None
-            for name, win in self._windowMap.items():
-                if win is window:
-                    current_name = name
-                    break
-
-            if current_name:
-                current_idx = tab_names.index(current_name)
+            if window in self._windowMap:
+                current_idx = windows.index(window)
                 tabbar.setCurrentIndex(current_idx)
 
             tabbar.blockSignals(False)
 
     def _updateCurrentTabIndicators(self, active_window: QMainWindow):
         """Update which tab is highlighted as current across all tab bars."""
-        # Find the name of the active window
-        active_name = None
-        for name, window in self._windowMap.items():
-            if window is active_window:
-                active_name = name
-                break
-
-        if not active_name:
+        if active_window not in self._windowMap:
             return
 
-        active_idx = list(self._windowMap.keys()).index(active_name)
+        active_idx = list(self._windowMap.keys()).index(active_window)
 
         # Update all tab bars
         for window, tabbar in self._tabBars.items():
@@ -201,17 +195,44 @@ class TabManager(QObject):
             tabbar.setCurrentIndex(active_idx)
             tabbar.blockSignals(False)
 
+    def _makeLabel(self, name: str) -> str:
+        """Build a display label for a new window of kind `name`, disambiguating
+        against any other currently-open windows of the same kind (e.g. multiple
+        Browser windows opened via an addon that allows it).
+
+        Numbered by a per-kind counter (`_kindCounters`) that only ever
+        increases while at least one window of that kind stays open, rather
+        than by how many are currently open: opening a 4th AddCards after
+        the 1st has already closed gets "AddCards (4)", not a reused
+        "AddCards (3)" that's still someone else's tab. The counter is
+        reset (see `_removeTabByWindow`) once every window of that kind has
+        closed, so the next one to open starts clean at the bare name
+        again.
+        """
+        count = self._kindCounters.get(name, 0) + 1
+        self._kindCounters[name] = count
+        return name if count == 1 else f"{name} ({count})"
+
     def _addAndFocusTab(self, name: str, window: QMainWindow):
-        """Add a tab for a window and track it."""
-        if name in self._windowMap:
+        """Add a tab for a window and track it.
+
+        `name` is the dialog *kind* (e.g. "Browser"); several windows of the
+        same kind may be tracked at once (e.g. via an addon that allows
+        opening multiple Browsers), so tracking is keyed by window instance,
+        not by name. Only re-showing the *same* instance is treated as
+        "already tracked".
+        """
+        if window in self._windowMap:
             # Already tracked, just focus it
             window.raise_()
             window.activateWindow()
             self._updateCurrentTabIndicators(window)
             return
 
-        # Add to window map
-        self._windowMap[name] = window
+        # Add to window map, disambiguating the label if another window of
+        # the same kind is already open
+        label = self._makeLabel(name)
+        self._windowMap[window] = WindowInfo(kind=name, label=label)
 
         # If there are existing tracked windows, sync this new window TO their geometry
         # (before it's shown, to avoid flickering)
@@ -242,14 +263,15 @@ class TabManager(QObject):
         self._syncAllTabBars()
         self._updateCurrentTabIndicators(window)
 
-        debugLog.log(f"Added tab '{name}'")
+        debugLog.log(f"Added tab '{label}'")
 
-    def _removeTab(self, name: str):
-        """Remove a tab and stop tracking the window."""
-        if name not in self._windowMap:
+    def _removeTabByWindow(self, window: QMainWindow):
+        """Remove a tab and stop tracking a specific window instance."""
+        if window not in self._windowMap:
             return
 
-        window = self._windowMap[name]
+        kind = self._windowMap[window].kind
+        label = self._windowMap[window].label
 
         # Remove from tracking
         if window in self._geometry_synced_windows:
@@ -265,25 +287,51 @@ class TabManager(QObject):
         window.removeEventFilter(self)
 
         # Remove from window map
-        del self._windowMap[name]
+        del self._windowMap[window]
+
+        # Once no window of this kind remains open, reset its label counter
+        # so the next one opened starts clean at the bare name again.
+        if not any(info.kind == kind for info in self._windowMap.values()):
+            self._kindCounters.pop(kind, None)
 
         # Sync remaining tab bars
         self._syncAllTabBars()
 
-        debugLog.log(f"Removed tab '{name}'")
+        debugLog.log(f"Removed tab '{label}'")
+
+    def _removeTabFallback(self, name: str):
+        """Fallback path: remove the tab for a closed dialog of kind `name`
+        when the actual closing instance couldn't be determined (see
+        `_hookDialogsClosed`, which normally resolves the instance directly
+        and calls `_removeTabByWindow` instead of this).
+
+        Unambiguous when only one window of `name` is tracked. If several
+        are tracked and we still ended up here, we don't know which one
+        actually closed -- guessing would risk tearing down a still-open
+        window's tab (the exact bug this replaced), so we log and leave
+        tracking alone rather than remove the wrong one.
+        """
+        candidates = [w for w, info in self._windowMap.items() if info.kind == name]
+        if not candidates:
+            return
+        if len(candidates) > 1:
+            debugLog.log(
+                f"_removeTabFallback: {len(candidates)} windows of kind '{name}' tracked "
+                "but could not identify which one closed; leaving tabs as-is"
+            )
+            return
+        self._removeTabByWindow(candidates[0])
 
     def _onTabChange(self, index: int, source_window: QMainWindow):
         """Handle tab selection change from any tab bar."""
         if index < 0:
             return
 
-        # Get tab name from any tab bar (they're all synced)
-        tab_name = list(self._windowMap.keys())[index]
-
-        if tab_name not in self._windowMap:
+        # Get window from index (all tab bars are synced)
+        windows = list(self._windowMap.keys())
+        if index >= len(windows):
             return
-
-        target_window = self._windowMap[tab_name]
+        target_window = windows[index]
 
         # Raise and activate the target window
         force_activate_window(target_window)
@@ -291,24 +339,23 @@ class TabManager(QObject):
         # Update current tab indicators across all tab bars
         self._updateCurrentTabIndicators(target_window)
 
-        debugLog.log(f"Switched to tab '{tab_name}'")
+        debugLog.log(f"Switched to tab '{self._windowMap[target_window].label}'")
 
     def _onTabCloseRequested(self, index: int, source_window: QMainWindow):
         """Handle close button click on a tab."""
         if index < 0:
             return
 
-        # Get tab name from index (all tab bars are synced)
-        tab_name = list(self._windowMap.keys())[index]
-        if tab_name not in self._windowMap:
+        # Get window from index (all tab bars are synced)
+        windows = list(self._windowMap.keys())
+        if index >= len(windows):
             return
-
-        window = self._windowMap[tab_name]
+        window = windows[index]
 
         # Close the window (this will trigger dialogs.markClosed)
         if window is not self.mw:
             window.close()
-        debugLog.log(f"Close requested for tab '{tab_name}'")
+        debugLog.log(f"Close requested for tab '{self._windowMap[window].label}'")
 
     def _syncWindowPositions(self, reference_window: QMainWindow):
         """Synchronize all tracked windows to the reference window's position and size."""
@@ -345,7 +392,7 @@ class TabManager(QObject):
 
         elif event.type() == QEvent.Type.WindowActivate:
             # Update tab selection when window is activated
-            if isinstance(source, QMainWindow) and source in self._windowMap.values():
+            if isinstance(source, QMainWindow) and source in self._windowMap:
                 debugLog.log(f"WindowActivate: {source}")
                 self._updateCurrentTabIndicators(source)
 
@@ -357,10 +404,56 @@ class TabManager(QObject):
 
         def new_mark_closed(name: str):
             debugLog.log(f"dialogs.markClosed called: {name}")
+
+            # aqt.dialogs.markClosed(name) doesn't tell us which instance
+            # closed when several windows share `name` (e.g. via an addon
+            # that allows opening a dialog multiple times). Anki always
+            # calls it from an instance method of the closing dialog
+            # though, so we recover the instance by walking the call stack
+            # for the nearest frame whose local `self` is one of the known
+            # Anki dialog window classes (resolved from wrappedDialogs) and
+            # is a window of this exact kind that we're currently tracking.
+            #
+            # We search the whole stack rather than assume it's our
+            # immediate caller, because another addon may *also* wrap
+            # dialogs.markClosed and sit between us and the real caller --
+            # assuming a fixed offset would silently grab the wrong object.
+            #
+            # We bind the result to a local literally named `self` in this
+            # frame (not just some other name) so that any addon relying on
+            # inspect.stack() to find the closing instance at a fixed frame
+            # depth from dialogs.markClosed's caller -- e.g. 354407385
+            # "Opening the same window multiple time", whose
+            # markClosedMultiple() does stack()[2].frame.f_locals['self'] --
+            # still finds it, even though we now sit between it and the
+            # dialog. Without this, inserting this wrapper shifts every
+            # frame index by one and that addon's lookup raises KeyError.
+            self = None
+            frame = inspect.currentframe()
+            frame = frame.f_back if frame else None  # skip our own frame
+            while frame is not None:
+                candidate = frame.f_locals.get("self")
+                # isinstance() must be checked before the dict lookup below:
+                # candidate may be an unhashable object from an unrelated
+                # frame, and only known Qt window classes are guaranteed
+                # hashable.
+                if isinstance(candidate, _wrappedDialogClasses):
+                    info = _tab_manager._windowMap.get(candidate)
+                    if info is not None and info.kind == name:
+                        self = candidate
+                        break
+                frame = frame.f_back
+
             result = _old_mark_closed(name)
 
-            # Remove tab for this window - check if TabManager still exists
-            _tab_manager._removeTab(name)
+            if self is not None:
+                # The stack search above already confirmed `self` is a
+                # tracked window of exactly kind `name`.
+                _tab_manager._removeTabByWindow(self)
+            else:
+                # Fallback for the rare case no matching instance was found
+                # on the stack.
+                _tab_manager._removeTabFallback(name)
 
             return result
 
@@ -371,6 +464,14 @@ class TabManager(QObject):
 _tab_manager = TabManager(mw)
 
 wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
+
+# Actual window classes behind wrappedDialogs, resolved once. Used by the
+# dialogs.markClosed stack search (see TabManager._hookDialogsClosed) to
+# recognize a real Anki dialog window on the stack, without hardcoding an
+# import per dialog type.
+_wrappedDialogClasses = tuple(
+    dialogs._dialogs[name][0] for name in wrappedDialogs if name in dialogs._dialogs
+)
 
 _wrappedSet = set()
 
