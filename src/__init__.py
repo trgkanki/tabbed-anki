@@ -31,7 +31,14 @@ from aqt import mw, dialogs, gui_hooks
 from typing import Optional, Dict, List, NamedTuple, cast
 from PyQt6 import sip
 from PyQt6.QtCore import Qt, QEvent, QObject, QTimer
-from PyQt6.QtWidgets import QMainWindow, QTabBar, QToolBar, QDialog, QSizePolicy
+from PyQt6.QtWidgets import (
+    QMainWindow,
+    QTabBar,
+    QToolBar,
+    QDialog,
+    QSizePolicy,
+    QWidget,
+)
 
 import sys
 import ctypes
@@ -386,54 +393,37 @@ class TabManager(QObject):
         def new_mark_closed(name: str):
             debugLog.log(f"dialogs.markClosed called: {name}")
 
-            # aqt.dialogs.markClosed(name) doesn't tell us which instance
-            # closed when several windows share `name` (e.g. via an addon
-            # that allows opening a dialog multiple times). Anki always
-            # calls it from an instance method of the closing dialog
-            # though, so we recover the instance by walking the call stack
-            # for the nearest frame whose local `self` is one of the known
-            # Anki dialog window classes (resolved from wrappedDialogs) and
-            # is a window of this exact kind that we're currently tracking.
-            #
-            # We search the whole stack rather than assume it's our
-            # immediate caller, because another addon may *also* wrap
-            # dialogs.markClosed and sit between us and the real caller --
-            # assuming a fixed offset would silently grab the wrong object.
-            #
-            # We bind the result to a local literally named `self` in this
-            # frame (not just some other name) so that any addon relying on
-            # inspect.stack() to find the closing instance at a fixed frame
-            # depth from dialogs.markClosed's caller -- e.g. 354407385
-            # "Opening the same window multiple time", whose
-            # markClosedMultiple() does stack()[2].frame.f_locals['self'] --
-            # still finds it, even though we now sit between it and the
-            # dialog. Without this, inserting this wrapper shifts every
-            # frame index by one and that addon's lookup raises KeyError.
-            self = None
+            # Anki reports only which *kind* closed, but always calls
+            # markClosed from an instance method of the dialog, so the
+            # instance can be recovered from the stack. The whole stack is
+            # searched rather than just our caller, since another addon may
+            # also wrap markClosed and sit in between.
+            creator = dialogs._dialogs.get(name, (None,))[0]
+            if not isinstance(creator, type):
+                creator = QWidget  # a few kinds register a factory function
+            closing = None
             frame = inspect.currentframe()
-            frame = frame.f_back if frame else None  # skip our own frame
+            frame = frame.f_back if frame else None
             while frame is not None:
                 candidate = frame.f_locals.get("self")
-                # isinstance() must be checked before the dict lookup below:
-                # candidate may be an unhashable object from an unrelated
-                # frame, and only known Qt window classes are guaranteed
-                # hashable.
-                if isinstance(candidate, _wrappedDialogClasses):
-                    info = _tab_manager._windowMap.get(candidate)
-                    if info is not None and info.kind == name:
-                        self = candidate
-                        break
+                if isinstance(candidate, creator):
+                    # Also bound as `self` for 354407385 "Opening the same
+                    # window multiple time", which reads the closing dialog
+                    # from stack()[2].frame.f_locals['self'] and would
+                    # otherwise land on this frame and find nothing. Left
+                    # unbound when the search fails: binding None instead
+                    # makes its lookup match no open dialog, which strands
+                    # the entry in its _openDialogs so allClosed() never
+                    # goes true and Anki can't quit or switch profiles.
+                    closing = self = candidate
+                    break
                 frame = frame.f_back
 
             result = _old_mark_closed(name)
 
-            if self is not None:
-                # The stack search above already confirmed `self` is a
-                # tracked window of exactly kind `name`.
-                _tab_manager._removeTabByWindow(self)
+            if closing is not None:
+                _tab_manager._removeTabByWindow(closing)
             else:
-                # Fallback for the rare case no matching instance was found
-                # on the stack.
                 _tab_manager._removeTabFallback(name)
 
             return result
@@ -444,14 +434,6 @@ class TabManager(QObject):
 _tab_manager = TabManager(mw)
 
 wrappedDialogs = ["AddCards", "Browser", "EditCurrent", "DeckStats", "NewDeckStats"]
-
-# Actual window classes behind wrappedDialogs, resolved once. Used by the
-# dialogs.markClosed stack search (see TabManager._hookDialogsClosed) to
-# recognize a real Anki dialog window on the stack, without hardcoding an
-# import per dialog type.
-_wrappedDialogClasses = tuple(
-    dialogs._dialogs[name][0] for name in wrappedDialogs if name in dialogs._dialogs
-)
 
 _wrappedSet = set()
 
