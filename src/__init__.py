@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 import sys
 import ctypes
 import inspect
+import time
 
 
 def force_activate_window(qwindow):
@@ -96,6 +97,11 @@ class TabManager(QObject):
         # disabled temporarily while we set geometry programmatically, so
         # that doesn't itself re-trigger a sync (see _syncWindowPositions)
         self._geometry_sync_enabled = True
+        # newly joined windows -> time.monotonic() deadline. The OS/Qt may
+        # deliver a stale Move/Resize with the window's *pre-sync* position
+        # shortly after our setGeometry; until the deadline, such events are
+        # undone (reference geometry re-applied) instead of being propagated.
+        self._geometry_settling: Dict[QMainWindow, float] = {}
 
         self._addAndFocusTab("Main", self.mw)
         self._hookDialogsClosed()
@@ -248,7 +254,15 @@ class TabManager(QObject):
                 reference_window = self._geometry_synced_windows[0]
                 if reference_window.isVisible():
                     geom = reference_window.geometry()
+                    debugLog.log(
+                        f"new window '{name}' geometry before sync: {window.geometry()}, "
+                        f"reference: {geom}"
+                    )
                     window.setGeometry(geom)
+                    debugLog.log(
+                        f"new window '{name}' geometry after sync: {window.geometry()}"
+                    )
+                    self._geometry_settling[window] = time.monotonic() + 0.5
                     debugLog.log(f"Synced new window '{name}' to existing geometry")
 
             if window not in self._geometry_synced_windows:
@@ -273,6 +287,7 @@ class TabManager(QObject):
         kind = self._windowMap[window].kind
         label = self._windowMap[window].label
 
+        self._geometry_settling.pop(window, None)
         if window in self._geometry_synced_windows:
             self._geometry_synced_windows.remove(window)
 
@@ -376,7 +391,28 @@ class TabManager(QObject):
                 isinstance(source, QMainWindow)
                 and source in self._geometry_synced_windows
             ):
+                deadline = self._geometry_settling.get(source)
+                if deadline is not None:
+                    if time.monotonic() < deadline:
+                        # stale event from before the initial sync: re-apply
+                        # the reference geometry rather than propagating it
+                        ref = self._geometry_synced_windows[0]
+                        if ref is not source and self._geometry_sync_enabled:
+                            self._geometry_sync_enabled = False
+                            try:
+                                source.setGeometry(ref.geometry())
+                            finally:
+                                self._geometry_sync_enabled = True
+                        debugLog.log("ignored stale geometry event on settling window")
+                        return super().eventFilter(a0, a1)
+                    del self._geometry_settling[source]
+
                 if source.isVisible():  # geometry isn't meaningful while hidden
+                    debugLog.log(
+                        f"geometry event {event.type().name} from "
+                        f"{self._windowMap[source].label}: {source.geometry()} "
+                        f"(sync_enabled={self._geometry_sync_enabled})"
+                    )
                     self._syncWindowPositions(source)
 
         elif event.type() == QEvent.Type.WindowActivate:
