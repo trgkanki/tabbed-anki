@@ -2,6 +2,12 @@
 
 [comment]: # (DO NOT MODIFY. new changelog goes here)
 
+## 26.11.8i105 (2026-11-08)
+
+- Fixed compatibility w/ [Opening the same window multiple time](https://ankiweb.net/shared/info/354407385).
+- Fixed anki unable to quit after closing some dialogs.
+- Basic fix for windows being displaced on left taskbar, windows 11 (Full fix requires fix on anki's side)
+
 ## 26.7.12i31 (2026-07-12)
 
 - Works for macOS!
